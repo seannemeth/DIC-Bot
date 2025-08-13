@@ -1,0 +1,168 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Coach {
+  id           Int      @id @default(autoincrement())
+  discordId    String   @unique
+  handle       String
+  team         String?  @unique
+  conference   String?
+  createdAt    DateTime @default(now())
+  gamesHome    Game[]   @relation("home")
+  gamesAway    Game[]   @relation("away")
+  banter       BanterMessage[]
+  userLore     UserLore?
+}
+
+model Game {
+  id            Int      @id @default(autoincrement())
+  season        Int
+  week          Int
+  homeCoach     Coach    @relation("home", fields: [homeCoachId], references: [id])
+  homeCoachId   Int
+  awayCoach     Coach    @relation("away", fields: [awayCoachId], references: [id])
+  awayCoachId   Int
+  homeTeam      String
+  awayTeam      String
+  homePts       Int?
+  awayPts       Int?
+  status        String   @default("pending") // pending|confirmed|void
+  reportedById  Int?
+  confirmedById Int?
+  messageId     String?
+  channelId     String?
+  playedAt      DateTime @default(now())
+
+  @@unique([season, week, homeCoachId, awayCoachId])
+  @@index([season, week, status])
+}
+
+model BanterMessage {
+  id         Int      @id @default(autoincrement())
+  coach      Coach    @relation(fields: [coachId], references: [id])
+  coachId    Int
+  channelId  String
+  messageId  String
+  ts         DateTime @default(now())
+  text       String
+  kept       Boolean  @default(true)
+  emojiScore Int      @default(0)
+  // lightweight embeddings: store as JSON array of numbers
+  embedding  Json?
+}
+
+model UserLore {
+  id          Int     @id @default(autoincrement())
+  coach       Coach   @relation(fields: [coachId], references: [id])
+  coachId     Int     @unique
+  nicknames   String[]
+  catchphrases String[]
+  rivalIds    Int[]
+  blocks      String[] // do-not-mention terms for this user
+  lastRefresh DateTime @default(now())
+}
+
+model LeagueLore {
+  id         Int      @id @default(autoincrement())
+  season     Int
+  week       Int
+  jokes      String[]
+  rivalPairs Json     // [{aId:1,bId:2,spice:0.7}, ...]
+  createdAt  DateTime @default(now())
+}
+
+model Config {
+  id          Int      @id @default(1)
+  leagueName  String   @default("Dynasty Intercollegiate Conference")
+  timezone    String   @default("America/New_York")
+  spiceLevel  String   @default("pg13")
+  allowLearn  Boolean  @default(true)
+  scoresChannelId String?
+  announcementsChannelId String?
+}
+
+model Wallet {
+  id            Int      @id @default(autoincrement())
+  coach         Coach    @relation(fields: [coachId], references: [id])
+  coachId       Int      @unique
+  balance       Int      @default(0)
+  lifetimeWon   Int      @default(0)
+  lifetimeLost  Int      @default(0)
+  lastStipendAt DateTime?
+  season        Int      @default(1)
+}
+
+model Line {
+  id        Int      @id @default(autoincrement())
+  season    Int
+  week      Int
+  gameId    Int?
+  homeTeam  String
+  awayTeam  String
+  spread    Float?   // home spread; negative means home favored
+  total     Float?
+  homeML    Int?
+  awayML    Int?
+  cutoff    DateTime?
+  createdAt DateTime @default(now())
+
+  @@index([season, week, homeTeam, awayTeam])
+}
+
+model Bet {
+  id         Int      @id @default(autoincrement())
+  coach      Coach    @relation(fields: [coachId], references: [id])
+  coachId    Int
+  season     Int
+  week       Int
+  gameId     Int?
+  market     String   // 'spread' | 'ml' | 'total'
+  side       String   // 'home'|'away'|'over'|'under'
+  line       Float?
+  price      Int?
+  amount     Int
+  status     String   @default("open") // 'open'|'void'|'lost'|'won'|'push'
+  placedAt   DateTime @default(now())
+  settledAt  DateTime?
+  payout     Int?     // net result (+win, 0, -amount)
+  snapshotId Int?
+  snapshot   BetLineSnapshot? @relation(fields: [snapshotId], references: [id])
+}
+
+model BetLineSnapshot {
+  id       Int     @id @default(autoincrement())
+  spread   Float?
+  total    Float?
+  homeML   Int?
+  awayML   Int?
+  cutoff   DateTime?
+  bet      Bet?
+}
+
+model ShopItem {
+  id     String  @id
+  name   String
+  cost   Int
+  notes  String
+  active Boolean @default(true)
+}
+
+model Redemption {
+  id          Int      @id @default(autoincrement())
+  coach       Coach    @relation(fields: [coachId], references: [id])
+  coachId     Int
+  itemId      String
+  cost        Int
+  status      String   @default("open") // 'open'|'fulfilled'|'void'
+  createdAt   DateTime @default(now())
+  fulfilledBy String?
+  fulfilledAt DateTime?
+  proofMsgId  String?
+  channelId   String?
+}
