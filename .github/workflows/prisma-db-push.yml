@@ -1,0 +1,34 @@
+name: Prisma DB Push
+
+on:
+  workflow_dispatch: {}   # Run manually from the Actions tab
+
+jobs:
+  db-push:
+    runs-on: ubuntu-latest
+
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Use Node LTS
+        uses: actions/setup-node@v4
+        with:
+          node-version: 'lts/*'
+          cache: 'npm'
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      - name: Push Prisma schema to DB
+        run: npx prisma db push --accept-data-loss
+
+      # Optional: seed initial items/wallets if you have scripts/seed.ts
+      # - name: Seed database
+      #   run: npx ts-node scripts/seed.ts
