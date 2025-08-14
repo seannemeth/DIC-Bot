@@ -1,0 +1,91 @@
+generator client { provider = "prisma-client-js" }
+datasource db { provider = "postgresql"; url = env("DATABASE_URL") }
+
+model Coach {
+  id           Int      @id @default(autoincrement())
+  discordId    String   @unique
+  handle       String
+  team         String?  @unique
+  conference   String?
+  createdAt    DateTime @default(now())
+  gamesHome    Game[]   @relation("home")
+  gamesAway    Game[]   @relation("away")
+  wallet       Wallet?
+}
+
+model Game {
+  id            Int      @id @default(autoincrement())
+  season        Int
+  week          Int
+  homeCoach     Coach    @relation("home", fields: [homeCoachId], references: [id])
+  homeCoachId   Int
+  awayCoach     Coach    @relation("away", fields: [awayCoachId], references: [id])
+  awayCoachId   Int
+  homeTeam      String
+  awayTeam      String
+  homePts       Int?
+  awayPts       Int?
+  status        String   @default("pending")
+  messageId     String?
+  channelId     String?
+  playedAt      DateTime @default(now())
+  @@index([season, week, status])
+}
+
+model Wallet {
+  id            Int      @id @default(autoincrement())
+  coach         Coach    @relation(fields: [coachId], references: [id])
+  coachId       Int      @unique
+  balance       Int      @default(0)
+  season        Int      @default(1)
+}
+
+model Line {
+  id        Int      @id @default(autoincrement())
+  season    Int
+  week      Int
+  homeTeam  String
+  awayTeam  String
+  spread    Float?
+  total     Float?
+  homeML    Int?
+  awayML    Int?
+  cutoff    DateTime?
+  createdAt DateTime @default(now())
+  @@index([season, week, homeTeam, awayTeam])
+}
+
+model Bet {
+  id         Int      @id @default(autoincrement())
+  coachId    Int
+  season     Int
+  week       Int
+  gameId     Int?
+  market     String
+  side       String
+  line       Float?
+  price      Int?
+  amount     Int
+  status     String   @default("open")
+  placedAt   DateTime @default(now())
+  settledAt  DateTime?
+  payout     Int?
+  snapshotId Int?
+}
+
+model ShopItem {
+  id     String  @id
+  name   String
+  cost   Int
+  notes  String
+  active Boolean @default(true)
+}
+
+model Redemption {
+  id          Int      @id @default(autoincrement())
+  coachId     Int
+  itemId      String
+  cost        Int
+  status      String   @default("open")
+  createdAt   DateTime @default(now())
+}
