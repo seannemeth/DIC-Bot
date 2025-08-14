@@ -85,3 +85,23 @@ model Meta {
   key   String @id
   value String
 }
+model Item {
+  id          String  @id            // equals item_id from sheet, e.g. "jersey"
+  name        String
+  price       Int
+  description String
+  createdAt   DateTime @default(now())
+  purchases   Purchase[]
+}
+
+model Purchase {
+  id          Int      @id @default(autoincrement())
+  coachId     Int
+  itemId      String
+  price       Int
+  note        String?
+  purchasedAt DateTime @default(now())
+
+  coach Coach @relation(fields: [coachId], references: [id])
+  item  Item  @relation(fields: [itemId], references: [id])
+}
