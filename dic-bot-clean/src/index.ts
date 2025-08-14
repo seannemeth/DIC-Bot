@@ -9,8 +9,6 @@ import * as Balance from './commands/balance';
 import * as ResetCoins from './commands/resetcoins';
 import { attachScoreListener } from './ingest/score-listener';
 
-const prisma = new PrismaClient();
-const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] });
 
 const commands = new Collection<string, any>();
 [SetTeam, PostScore, Standings, Leaderboard, Balance, ResetCoins].forEach((m:any) => commands.set(m.command.data.name, m.command));
