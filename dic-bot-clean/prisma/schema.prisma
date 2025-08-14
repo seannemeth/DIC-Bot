@@ -104,4 +104,7 @@ model Purchase {
 
   coach Coach @relation(fields: [coachId], references: [id])
   item  Item  @relation(fields: [itemId], references: [id])
+
+  purchases  Purchase[]
+
 }
