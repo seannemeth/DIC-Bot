@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>DIC Dashboard</title>
+  <link rel="stylesheet" href="/styles.css"/>
+</head>
+<body>
+  <header><h1>DIC Dashboard</h1></header>
+  <nav>
+    <button id="tab-standings">Standings</button>
+    <button id="tab-power">Power</button>
+    <button id="tab-recent">Recent Games</button>
+  </nav>
+  <main>
+    <section id="section-standings" class="section">
+      <h2>Standings</h2>
+      <table id="standings"><thead><tr><th>#</th><th>Team</th><th>W-L</th><th>PF</th><th>PA</th><th>Diff</th></tr></thead><tbody></tbody></table>
+    </section>
+    <section id="section-power" class="section hidden">
+      <h2>Power Rankings</h2>
+      <table id="power"><thead><tr><th>#</th><th>Team</th><th>PR</th><th>Elo</th></tr></thead><tbody></tbody></table>
+    </section>
+    <section id="section-recent" class="section hidden">
+      <h2>Recent Games</h2>
+      <table id="recent"><thead><tr><th>Date</th><th>Matchup</th><th>Final</th></tr></thead><tbody></tbody></table>
+    </section>
+  </main>
+  <script src="/dashboard.js"></script>
+</body>
+</html>
