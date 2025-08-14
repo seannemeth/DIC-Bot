@@ -21,7 +21,10 @@ export const command = {
     const sub = interaction.options.getSubcommand();
     if (sub === 'view') {
       const items = await prisma.item.findMany({ orderBy: { price: 'asc' } });
-      const lines = items.map(i => `**${i.id}** — ${i.name} (DIC$ ${i.price})\n${i.description}`);
+      const lines = items.map((i: any) =>
+  `**${i.id}** — ${i.name} (DIC$ ${i.price})\n${i.description}`
+);
+
       const embed = new EmbedBuilder().setTitle('🏪 DIC Store').setDescription(lines.join('\n\n') || 'No items yet.');
       await interaction.reply({ embeds:[embed] });
       return;
