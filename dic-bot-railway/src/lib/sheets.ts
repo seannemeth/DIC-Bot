@@ -1,1 +1,0 @@
-import { GoogleSpreadsheet } from 'google-spreadsheet'; export async function loadSheet(docId:string, email:string, key:string){ const doc=new GoogleSpreadsheet(docId); await doc.useServiceAccountAuth({client_email:email, private_key:key.replace(/\\n/g,'\n')}); await doc.loadInfo(); return doc; }
