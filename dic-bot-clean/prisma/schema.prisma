@@ -19,6 +19,7 @@ model Coach {
   gamesHome  Game[]   @relation("home")
   gamesAway  Game[]   @relation("away")
   wallet     Wallet?
+  purchases  Purchase[]
 }
 
 model Game {
@@ -86,11 +87,11 @@ model Meta {
   value String
 }
 model Item {
-  id          String  @id            // equals item_id from sheet, e.g. "jersey"
+  id          String     @id          // e.g. "jersey"
   name        String
   price       Int
   description String
-  createdAt   DateTime @default(now())
+  createdAt   DateTime   @default(now())
   purchases   Purchase[]
 }
 
@@ -104,7 +105,4 @@ model Purchase {
 
   coach Coach @relation(fields: [coachId], references: [id])
   item  Item  @relation(fields: [itemId], references: [id])
-
-  purchases  Purchase[]
-
 }
