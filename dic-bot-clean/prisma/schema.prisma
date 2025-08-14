@@ -1,0 +1,80 @@
+generator client { provider = "prisma-client-js" }
+
+datasource db { provider = "postgresql"; url = env("DATABASE_URL") }
+
+model Coach {
+  id         Int      @id @default(autoincrement())
+  discordId  String   @unique
+  handle     String
+  team       String?  @unique
+  conference String?
+  createdAt  DateTime @default(now())
+  gamesHome  Game[]   @relation("home")
+  gamesAway  Game[]   @relation("away")
+  wallet     Wallet?
+}
+
+model Game {
+  id            Int      @id @default(autoincrement())
+  season        Int
+  week          Int
+  homeCoach     Coach    @relation("home", fields: [homeCoachId], references: [id])
+  homeCoachId   Int
+  awayCoach     Coach    @relation("away", fields: [awayCoachId], references: [id])
+  awayCoachId   Int
+  homeTeam      String
+  awayTeam      String
+  homePts       Int?
+  awayPts       Int?
+  status        String   @default("pending")
+  messageId     String?
+  channelId     String?
+  reportedById  Int?
+  confirmedById Int?
+  playedAt      DateTime @default(now())
+  @@index([season, week, status])
+}
+
+model Wallet {
+  id       Int   @id @default(autoincrement())
+  coachId  Int   @unique
+  balance  Int   @default(500)
+  season   Int   @default(1)
+  coach    Coach @relation(fields: [coachId], references: [id])
+}
+
+model Line {
+  id        Int      @id @default(autoincrement())
+  season    Int
+  week      Int
+  homeTeam  String
+  awayTeam  String
+  spread    Float?
+  total     Float?
+  homeML    Int?
+  awayML    Int?
+  cutoff    DateTime?
+  createdAt DateTime @default(now())
+  @@index([season, week, homeTeam, awayTeam])
+}
+
+model Bet {
+  id        Int      @id @default(autoincrement())
+  coachId   Int
+  season    Int
+  week      Int
+  gameId    Int?
+  market    String   // spread|ml|total
+  side      String   // home|away|over|under
+  line      Float?
+  amount    Int
+  status    String   @default("open") // open|won|lost|push
+  placedAt  DateTime @default(now())
+  settledAt DateTime?
+  payout    Int?
+}
+
+model Meta {
+  key   String @id
+  value String
+}
