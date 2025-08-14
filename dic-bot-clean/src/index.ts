@@ -1,45 +1,47 @@
-import 'dotenv/config';
-import { Client, GatewayIntentBits, Collection, Interaction, ButtonInteraction, EmbedBuilder, REST, Routes } from 'discord.js';
+// src/commands/standings.ts
+import { SlashCommandBuilder, EmbedBuilder } from 'discord.js';
 import { PrismaClient } from '@prisma/client';
-import * as SetTeam from './commands/setteam';
-import * as PostScore from './commands/postscore';
-import * as Standings from './commands/standings';
-import * as Leaderboard from './commands/leaderboard';
-import * as Balance from './commands/balance';
-import * as ResetCoins from './commands/resetcoins';
-import { attachScoreListener } from './ingest/score-listener';
+const prisma = new PrismaClient();
 
+export const command = {
+  data: new SlashCommandBuilder().setName('standings').setDescription('Show overall standings'),
+  async execute(interaction: any) {
+    const teams = await prisma.coach.findMany();
+    const games = await prisma.game.findMany({ where: { status: 'confirmed' } });
 
-const commands = new Collection<string, any>();
-[SetTeam, PostScore, Standings, Leaderboard, Balance, ResetCoins].forEach((m:any) => commands.set(m.command.data.name, m.command));
+    type Rec = { id:number, team:string, w:number,l:number,t:number,pf:number,pa:number,diff:number };
+    const table: Rec[] = teams.map((t:any) => ({
+      id: t.id, team: t.team || t.handle, w:0,l:0,t:0,pf:0,pa:0,diff:0
+    }));
+    const lookup = new Map<number, Rec>(table.map((r:Rec) => [r.id, r]));
 
-client.once('ready', async () => {
-  console.log(`Logged in as ${client.user?.tag}`);
-  // register slash commands to all guilds
-  try {
-    const body = Array.from(commands.values()).map((c:any)=> c.data.toJSON());
-    for (const [, guild] of client.guilds.cache) {
-      await guild.commands.set(body);
-      console.log(`[SLASH] Registered commands for guild ${guild.name}`);
+    for (const g of games) {
+      if (g.homePts == null || g.awayPts == null) continue;
+      const h = lookup.get(g.homeCoachId)!;
+      const a = lookup.get(g.awayCoachId)!;
+
+      h.pf += g.homePts; h.pa += g.awayPts; h.diff += g.homePts - g.awayPts;
+      a.pf += g.awayPts; a.pa += g.homePts; a.diff += g.awayPts - g.homePts;
+
+      if (g.homePts > g.awayPts) { h.w++; a.l++; }
+      else if (g.homePts < g.awayPts) { a.w++; h.l++; }
+      else { h.t++; a.t++; }
     }
-  } catch (e) { console.error('[SLASH] Registration error:', e); }
-  // attach score listener (emoji-based score parsing)
-  attachScoreListener(client, prisma);
-});
 
-client.on('interactionCreate', async (interaction: Interaction) => {
-  if (!interaction.isChatInputCommand()) return;
-  const cmd = commands.get(interaction.commandName);
-  if (!cmd) return;
-  if (cmd.adminOnly && !('memberPermissions' in interaction && interaction.memberPermissions?.has('Administrator'))) {
-    await interaction.reply({ content: 'Admin only.', ephemeral: true }); return;
+    const sorted = table.sort((x:Rec,y:Rec) => {
+      const wx = x.w + x.l + x.t ? (x.w + 0.5*x.t)/(x.w + x.l + x.t) : 0;
+      const wy = y.w + y.l + y.t ? (y.w + 0.5*y.t)/(y.w + y.l + y.t) : 0;
+      if (wy !== wx) return wy - wx;
+      if (y.diff !== x.diff) return y.diff - x.diff;
+      return (y.pf - y.pa) - (x.pf - x.pa);
+    });
+
+    const lines = sorted.map((r:Rec,i:number) =>
+      `**${i+1}. ${r.team}**  ${r.w}-${r.l}${r.t?'-'+r.t:''}  (PF ${r.pf} / PA ${r.pa} / Diff ${r.diff})`
+    );
+
+    await interaction.reply({
+      embeds: [new EmbedBuilder().setTitle('DIC Standings').setDescription(lines.join('\n') || 'No data').setColor(0x3498db)]
+    });
   }
-  try { await cmd.execute(interaction); }
-  catch (e) { console.error(e); try {
-    // @ts-ignore
-    if (interaction.replied || interaction.deferred) await interaction.followUp({ content:'Command error.', ephemeral:true });
-    else await interaction.reply({ content:'Command error.', ephemeral:true });
-  } catch{} }
-});
-
-client.login(process.env.DISCORD_TOKEN);
+} as const;
