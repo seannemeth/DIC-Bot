@@ -1,6 +1,13 @@
-generator client { provider = "prisma-client-js" }
+// prisma/schema.prisma
 
-datasource db { provider = "postgresql"; url = env("DATABASE_URL") }
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
 
 model Coach {
   id         Int      @id @default(autoincrement())
@@ -26,7 +33,7 @@ model Game {
   awayTeam      String
   homePts       Int?
   awayPts       Int?
-  status        String   @default("pending")
+  status        String   @default("pending") // pending|confirmed|disputed
   messageId     String?
   channelId     String?
   reportedById  Int?
