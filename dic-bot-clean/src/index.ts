@@ -93,5 +93,11 @@ client.on('interactionCreate', async (interaction: Interaction) => {
     } catch {}
   }
 });
-
+const token = process.env.DISCORD_TOKEN;
+if (!token || typeof token !== 'string') {
+  throw new Error('DISCORD_TOKEN is missing. Set it in Railway Variables.');
+}
+if (!token.includes('.')) {
+  throw new Error('DISCORD_TOKEN looks wrong (should contain dots). Did you paste the bot token from the Bot tab?');
+}
 client.login(process.env.DISCORD_TOKEN);
