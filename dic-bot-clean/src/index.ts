@@ -1,3 +1,18 @@
+// src/index.ts (imports and registration section)
+import * as Store from './commands/store';
+import * as Inventory from './commands/inventory';
+import * as Lines from './commands/lines';
+import * as PlaceBet from './commands/placebet';
+import * as SetTeam from './commands/setteam';
+import * as PostScore from './commands/postscore';
+import * as Standings from './commands/standings';
+import * as Leaderboard from './commands/leaderboard';
+import * as Balance from './commands/balance';
+import * as ResetCoins from './commands/resetcoins';
+
+// Register all commands with the commands collection
+[SetTeam, PostScore, Standings, Leaderboard, Balance, ResetCoins, Store, Inventory, Lines, PlaceBet]
+  .forEach((m: any) => commands.set(m.command.data.name, m.command));
 // src/commands/standings.ts
 import { SlashCommandBuilder, EmbedBuilder } from 'discord.js';
 import { PrismaClient } from '@prisma/client';
