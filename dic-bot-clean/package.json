@@ -1,4 +1,10 @@
 {
+  "scripts": {
+    "build": "tsc && prisma generate",
+    "db:push": "prisma db push",
+    "start": "npm run db:push && node dist/index.js"
+  }
+  {
   "name": "dic-discord-bot",
   "version": "2.0.0",
   "private": true,
