@@ -52,6 +52,15 @@ const commands = new Collection<string, any>();
 client.once('ready', async () => {
   console.log(`Logged in as ${client.user?.tag}`);
 
+  // Diagnose which command is invalid
+for (const [name, cmd] of commands) {
+  try {
+    cmd.data.toJSON();
+  } catch (e) {
+    console.error('[SLASH BUILD ERROR] in command:', name, e);
+  }
+}
+
   // Register slash commands for each guild the bot is in
   try {
     const body = Array.from(commands.values()).map((c: any) => c.data.toJSON());
