@@ -1,0 +1,102 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>DIC Dashboard</title>
+  <link rel="stylesheet" href="/styles.css"/>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+  <header>
+    <h1>Dynasty Intercollegiate Conference</h1>
+    <nav>
+      <button id="tab-overall" class="active">Standings</button>
+      <button id="tab-power">Power</button>
+      <button id="tab-conferences">Conferences</button>
+      <button id="tab-recent">Recent Games</button>
+      <button id="tab-betting">Betting</button>
+    </nav>
+  </header>
+  <main>
+    <section id="section-overall" class="section visible">
+      <h2>Overall Standings</h2>
+      <table id="standings"><thead><tr><th>#</th><th>Team</th><th>W-L</th><th>PF</th><th>PA</th><th>Diff</th></tr></thead><tbody></tbody></table>
+    </section>
+
+    <section id="section-power" class="section">
+      <h2>Power Rankings</h2>
+      <canvas id="powerChart"></canvas>
+      <table id="power"><thead><tr><th>#</th><th>Team</th><th>PR</th><th>Elo</th><th>SOS</th><th>Form</th></tr></thead><tbody></tbody></table>
+    </section>
+
+    <section id="section-conferences" class="section">
+      <h2>Conference Standings</h2>
+      <div class="controls">
+        <label>Conference
+          <select id="conf-select"></select>
+        </label>
+        <button id="conf-load">Load</button>
+      </div>
+      <table id="conf-standings"><thead><tr><th>#</th><th>Team</th><th>W-L</th><th>PF</th><th>PA</th><th>Diff</th></tr></thead><tbody></tbody></table>
+    </section>
+
+    <section id="section-recent" class="section">
+      <h2>Recent Games</h2>
+      <table id="recent"><thead><tr><th>When</th><th>Matchup</th><th>Score</th></tr></thead><tbody></tbody></table>
+    </section>
+
+    <section id="section-betting" class="section">
+      <h2>Betting (helper)</h2>
+      <div class="grid">
+        <div class="card">
+          <h3>Lines</h3>
+          <div class="controls">
+            <label>Season <input id="lines-season" type="number" value="1"/></label>
+            <label>Week <input id="lines-week" type="number" value="1"/></label>
+            <button id="load-lines">Load</button>
+          </div>
+          <table id="lines">
+            <thead>
+              <tr><th>Matchup</th><th>Spread (Home)</th><th>Total</th><th>Home ML</th><th>Away ML</th><th>Cutoff</th><th></th></tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div class="card">
+          <h3>Bet Slip (copy to Discord)</h3>
+          <label>Market
+            <select id="bet-market">
+              <option value="spread">Spread</option>
+              <option value="ml">Moneyline</option>
+              <option value="total">Total</option>
+            </select>
+          </label>
+          <label>Side
+            <select id="bet-side">
+              <option value="home">home</option>
+              <option value="away">away</option>
+              <option value="over">over</option>
+              <option value="under">under</option>
+            </select>
+          </label>
+          <label>Amount <input id="bet-amount" type="number" min="1" value="100"/></label>
+          <div class="info small">This generates a <code>/bet</code> command you can paste into Discord.</div>
+          <pre id="bet-command">/bet market:spread home:PSU away:TAMU season:1 week:1 side:home amount:100</pre>
+          <button id="copy-bet">Copy Command</button>
+        </div>
+        <div class="card">
+          <h3>Bank Leaderboard</h3>
+          <table id="wallets">
+            <thead><tr><th>#</th><th>Team</th><th>Balance</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>Built for the DIC • Bot + dashboard</footer>
+  <script src="/dashboard.js"></script>
+</body>
+</html>
