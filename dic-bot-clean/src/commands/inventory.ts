@@ -1,17 +1,30 @@
-import { SlashCommandBuilder, EmbedBuilder } from 'discord.js';
+import { SlashCommandBuilder, EmbedBuilder, type ChatInputCommandInteraction } from 'discord.js';
 import { PrismaClient } from '@prisma/client';
 const prisma = new PrismaClient();
 
 export const command = {
-  data: new SlashCommandBuilder().setName('inventory').setDescription('Your purchased items'),
-  async execute(interaction:any){
-    const coach = await prisma.coach.findUnique({ where:{ discordId: interaction.user.id } });
-    if (!coach) { await interaction.reply({ content:'Run /setteam first.', ephemeral:true }); return; }
-    const purchases = await prisma.purchase.findMany({ where:{ coachId: coach.id }, include:{ item:true }, orderBy:{ purchasedAt:'desc' } });
-    const lines = purchases.map((p: any) =>
-  `• ${p.item.name} — DIC$ ${p.price} *(on ${p.purchasedAt.toISOString().slice(0,10)})*`
-);
-    const embed = new EmbedBuilder().setTitle('🎒 Your Inventory').setDescription(lines.join('\n') || '_Empty_');
-    await interaction.reply({ embeds:[embed], ephemeral:true });
+  data: new SlashCommandBuilder()
+    .setName('inventory')
+    .setDescription('See your purchased items'),
+  async execute(interaction: ChatInputCommandInteraction) {
+    await interaction.deferReply({ ephemeral: true });
+    const coach = await prisma.coach.findUnique({ where: { discordId: interaction.user.id } });
+    if (!coach) return interaction.editReply('❌ You must set up first with `/setteam`.');
+
+    const rows = await prisma.purchase.findMany({
+      where: { coachId: coach.id },
+      include: { item: true },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    if (!rows.length) return interaction.editReply('Your inventory is empty.');
+
+    const lines = rows.map(r => {
+      const left = r.qty - r.consumed;
+      return `**${r.item.itemKey}** — ${r.item.name} • ${left}/${r.qty} left`;
+    });
+
+    const embed = new EmbedBuilder().setTitle('Your Inventory').setDescription(lines.join('\n')).setColor(0x9b59b6);
+    return interaction.editReply({ embeds: [embed] });
   }
 } as const;
