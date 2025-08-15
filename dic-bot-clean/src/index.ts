@@ -27,6 +27,7 @@ import { command as schedule } from './commands/schedule';
 import { command as scheduleImport } from './commands/scheduleImport';
 import { command as scoresImport } from './commands/scoresImport';
 import { command as storeSync } from './commands/store_sync';
+import { command as setteamBulk } from './commands/setteam_bulk';
 
 // === Emoji score listener ===
 import { attachScoreListener } from './ingest/score-listener';
@@ -68,7 +69,8 @@ const modules = [
   { command: schedule },
   { command: scheduleImport },
   { command: scoresImport },
-  { command: storeSync }, 
+  { command: storeSync },
+  { command: setteamBulk },
 ];
 
 for (const m of modules) {
