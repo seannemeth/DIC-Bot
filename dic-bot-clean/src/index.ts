@@ -23,6 +23,7 @@ import * as PowerRankings from './commands/powerrankings';
 import * as Settle from './commands/settle';
 import * as Buy from './commands/buy';
 import * as Redeem from './commands/redeem';
+import * as LiveAlerts from './commands/livealerts';
 import { command as schedule } from './commands/schedule';
 import { command as scheduleImport } from './commands/scheduleImport';
 import { command as scoresImport } from './commands/scoresImport';
@@ -65,6 +66,7 @@ const modules = [
   Settle,
   Buy,
   Redeem,
+  LiveAlerts,
   // These are imported as { command }
   { command: schedule },
   { command: scheduleImport },
