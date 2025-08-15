@@ -85,7 +85,6 @@ export const command = {
         amount: amt,
         season,
         week: week ?? undefined,
-        note: note ?? undefined,
       },
     });
 
