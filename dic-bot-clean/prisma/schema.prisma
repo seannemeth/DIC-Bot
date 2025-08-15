@@ -12,6 +12,7 @@ model Coach {
   team       String  @unique
   discordId  String  @unique
   conference String?
+  handle     String?        // <-- ADDED (used by /setteam)
 
   // Relations
   gamesHome  Game[]  @relation("home")
@@ -25,11 +26,11 @@ model Coach {
 enum GameStatus {
   scheduled
   confirmed
-  pending   // <-- used in loadschedule/ingest
+  pending          // <-- used by loadschedule / score-listener
 }
 
 model Game {
-  id           Int        @id @default(autoincrement())  // <-- INT so TS can pass number
+  id           Int        @id @default(autoincrement())  // numeric id (your code expects number)
   season       Int
   week         Int
   homeTeam     String
@@ -37,9 +38,11 @@ model Game {
   homePts      Int?
   awayPts      Int?
   status       GameStatus @default(scheduled)
-  messageId    String?    // <-- some code updates messageId
+  messageId    String?    // <-- used by score-listener
+  reportedById String?    // <-- used by score-listener
+  channelId    String?    // <-- used by score-listener
 
-  // --- relations to Coach (optional so you can import schedule first) ---
+  // relations to Coach (optional so you can import schedule first)
   homeCoachId  String?
   awayCoachId  String?
 
@@ -76,7 +79,7 @@ model Line {
 
 model Bet {
   id        Int      @id @default(autoincrement())
-  coachId   Int      // kept as Int (no relation) to avoid widespread changes
+  coachId   Int      // left as Int (no relation) to avoid code churn
   season    Int
   week      Int
   gameId    Int?
