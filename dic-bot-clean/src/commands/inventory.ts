@@ -1,3 +1,4 @@
+// src/commands/inventory.ts
 import { SlashCommandBuilder, EmbedBuilder, type ChatInputCommandInteraction } from 'discord.js';
 import { PrismaClient } from '@prisma/client';
 const prisma = new PrismaClient();
@@ -19,7 +20,7 @@ export const command = {
 
     if (!rows.length) return interaction.editReply('Your inventory is empty.');
 
-    const lines = rows.map(r => {
+    const lines = rows.map((r: any) => {
       const left = r.qty - r.consumed;
       return `**${r.item.itemKey}** — ${r.item.name} • ${left}/${r.qty} left`;
     });
