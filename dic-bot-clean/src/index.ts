@@ -21,6 +21,8 @@ import * as Balance from './commands/balance';
 import * as ResetCoins from './commands/resetcoins';
 import * as PowerRankings from './commands/powerrankings';
 import * as Settle from './commands/settle';
+import * as Buy from './commands/buy';
+import * as Redeem from './commands/redeem';
 
 // === Emoji score listener ===
 import { attachScoreListener } from './ingest/score-listener';
@@ -50,7 +52,9 @@ const commands = new Collection<string, any>();
   Lines,
   PlaceBet,
   PowerRankings,
-  Settle
+  Settle,
+  Buy,
+  Redeem
 ].forEach((m: any) => commands.set(m.command.data.name, m.command));
 
 client.once('ready', async () => {
