@@ -10,19 +10,25 @@ import {
   TextInputStyle,
   type Interaction,
 } from 'discord.js';
-import { getWeekSchedule } from '../lib/schedules';
 import { PrismaClient } from '@prisma/client';
+import { getWeekSchedule } from '../lib/schedules';
 
-// ===== If you already moved these to ../lib/teamNames, import instead =====
+const prisma = new PrismaClient();
+
+// ---------- Canonicalization helpers (keep in this file or move to lib) ----------
 function sanitizeTeam(raw: string) {
   return String(raw ?? '').replace(/\s*\([^)]*\)\s*$/, '').replace(/\s+/g, ' ').trim();
 }
-const TEAM_ALIASES: Record<string,string> = {
-  'pitt':'pittsburgh','penn st':'penn state','miss state':'mississippi state',
-  'oklahoma st':'oklahoma state','kansas st':'kansas state','nc state':'north carolina state',
+const TEAM_ALIASES: Record<string, string> = {
+  'pitt': 'pittsburgh',
+  'penn st': 'penn state',
+  'miss state': 'mississippi state',
+  'oklahoma st': 'oklahoma state',
+  'kansas st': 'kansas state',
+  'nc state': 'north carolina state',
 };
 function canonTeam(raw: string) {
-  const s = sanitizeTeam(raw).replace(/\./g,'').toLowerCase();
+  const s = sanitizeTeam(raw).replace(/\./g, '').toLowerCase();
   if (TEAM_ALIASES[s]) return TEAM_ALIASES[s];
   if (s.endsWith(' st')) return s.replace(/ st$/, ' state');
   return s;
@@ -31,11 +37,8 @@ function matchupKey(a: string, b: string) {
   const A = canonTeam(a), B = canonTeam(b);
   return A < B ? `${A}::${B}` : `${B}::${A}`;
 }
-// ========================================================================
+// -------------------------------------------------------------------------------
 
-const prisma = new PrismaClient();
-
-// We’ll reuse this customId prefix to route interactions
 const SELECT_ID = 'postscore_select';
 const MODAL_ID_PREFIX = 'postscore_modal';
 
@@ -45,16 +48,17 @@ export const command = {
     .setDescription('Post a final score for a game this week')
     .addIntegerOption(o => o.setName('season').setDescription('Season').setRequired(true))
     .addIntegerOption(o => o.setName('week').setDescription('Week').setRequired(true)),
-
   async execute(interaction: ChatInputCommandInteraction) {
     await interaction.deferReply({ ephemeral: true });
 
     const season = interaction.options.getInteger('season', true);
     const week = interaction.options.getInteger('week', true);
 
-    // Pull games and filter to Remaining (not confirmed) using canonical keys
+    // Get week schedule and filter out already-played using canonical keys
     const { played, remaining } = await getWeekSchedule(season, week);
-    const playedSet = new Set<string>(played.map((g: any) => matchupKey(g.homeTeam, g.awayTeam)));
+    const playedSet = new Set<string>(
+      (played as any[]).map(g => matchupKey(g.homeTeam, g.awayTeam))
+    );
     const remainingFiltered = (remaining as any[]).filter(
       g => !playedSet.has(matchupKey(g.homeTeam, g.awayTeam))
     );
@@ -64,17 +68,11 @@ export const command = {
       return;
     }
 
-    // Discord select menus allow max 25 options
+    // Build select menu (Discord max 25 options)
     const options = remainingFiltered.slice(0, 25).map((g: any) => {
       const label = `${sanitizeTeam(g.homeTeam)} vs ${sanitizeTeam(g.awayTeam)}`;
-      // Encode just what we need; keep it short for customId/value limits
-      const value = JSON.stringify({
-        s: season, w: week,
-        h: g.homeTeam, a: g.awayTeam
-      });
-      return new StringSelectMenuOptionBuilder()
-        .setLabel(label)
-        .setValue(value);
+      const value = JSON.stringify({ s: season, w: week, h: g.homeTeam, a: g.awayTeam });
+      return new StringSelectMenuOptionBuilder().setLabel(label).setValue(value);
     });
 
     const menu = new StringSelectMenuBuilder()
@@ -93,16 +91,14 @@ export const command = {
   },
 } as const;
 
-// ============= Interaction routing helpers (exported) =============
+// ---------- Interaction handlers exported for index.ts routing ----------
 
-// Handle the select -> show modal
 export async function handlePostScoreSelect(interaction: Interaction) {
   if (!interaction.isStringSelectMenu()) return;
   if (interaction.customId !== SELECT_ID) return;
 
   const [raw] = interaction.values;
-  // Value length can be up to 100; keep payload tiny
-  const payload = JSON.parse(raw) as { s: number; w: number; h: string; a: string; };
+  const payload = JSON.parse(raw) as { s: number; w: number; h: string; a: string };
   const { s: season, w: week, h: homeTeam, a: awayTeam } = payload;
 
   const modal = new ModalBuilder()
@@ -130,7 +126,6 @@ export async function handlePostScoreSelect(interaction: Interaction) {
   );
 }
 
-// Handle modal submit -> write scores
 export async function handlePostScoreModal(interaction: Interaction) {
   if (!interaction.isModalSubmit()) return;
   if (!interaction.customId.startsWith(`${MODAL_ID_PREFIX}:`)) return;
@@ -154,7 +149,7 @@ export async function handlePostScoreModal(interaction: Interaction) {
     const season = payload.s;
     const week = payload.w;
 
-    // Pull all games for the week; match by canonical key in JS
+    // Fetch games for week and match in JS by canonical key
     const games = await prisma.game.findMany({
       where: { season, week },
       select: {
@@ -172,13 +167,12 @@ export async function handlePostScoreModal(interaction: Interaction) {
 
     if (!game) {
       await interaction.editReply(
-        `❌ Couldn’t find the game record: S${season} W${week} ${sanitizeTeam(payload.h)} vs ${sanitizeTeam(payload.a)}.`
+        `❌ Couldn’t find: S${season} W${week} ${sanitizeTeam(payload.h)} vs ${sanitizeTeam(payload.a)}.`
       );
       return;
     }
 
-    // Map entered scores to stored home/away order.
-    // If stored homeTeam matches payload.h canonically, then home gets homePts, else swap.
+    // Map entered scores to stored home/away order
     const storedHomeIsPayloadHome =
       canonTeam(game.homeTeam) === canonTeam(payload.h) &&
       canonTeam(game.awayTeam) === canonTeam(payload.a);
@@ -191,9 +185,8 @@ export async function handlePostScoreModal(interaction: Interaction) {
       data: {
         homePts: nextHomePts,
         awayPts: nextAwayPts,
-        status: 'confirmed', // adjust if your enum uses a different value/case
-        // If you also track booleans:
-        // played: true,
+        status: 'confirmed' as any, // cast in case your enum type is strict
+        // played: true, // uncomment if you track a played boolean
       },
       select: { homeTeam: true, awayTeam: true, homePts: true, awayPts: true },
     });
