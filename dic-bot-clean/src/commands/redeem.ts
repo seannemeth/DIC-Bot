@@ -1,6 +1,6 @@
 // src/commands/redeem.ts
 import { SlashCommandBuilder, type ChatInputCommandInteraction } from 'discord.js';
-import { PrismaClient, type Purchase } from '@prisma/client';
+import { PrismaClient } from '@prisma/client';
 const prisma = new PrismaClient();
 
 export const command = {
@@ -64,11 +64,14 @@ export const command = {
       orderBy: { purchasedAt: 'asc' },
     });
 
-    const usable = purchases.find((p: Purchase) => p.consumed < p.qty);
+    let usable: (typeof purchases)[number] | null = null;
+    for (const p of purchases) {
+      if (p.consumed < p.qty) { usable = p; break; }
+    }
     if (!usable) return interaction.editReply('❌ You do not have any unused copies of that item.');
 
     // Determine amount from override or item payload
-    const defaultAmt = Number((item.payload as any)?.amount ?? 0);
+    const defaultAmt = Number((item.payload as Record<string, unknown> | null)?.['amount'] ?? 0);
     const amt = amountOverride ?? defaultAmt;
     if (!amt || amt <= 0) {
       return interaction.editReply('❌ Missing amount. Set item payload amount in the Store sheet or pass `/redeem amount:`.');
@@ -92,6 +95,8 @@ export const command = {
       data: { consumed: { increment: 1 } },
     });
 
-    return interaction.editReply(`✅ Redeemed **${item.name}**: +${amt} **${attribute}** recorded for Season ${season}${week ? `, Week ${week}` : ''}.`);
+    return interaction.editReply(
+      `✅ Redeemed **${item.name}**: +${amt} **${attribute}** recorded for Season ${season}${week ? `, Week ${week}` : ''}.`
+    );
   },
 } as const;
