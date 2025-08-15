@@ -21,3 +21,5 @@ export async function getCurrentSeasonWeek() {
   const week = (await getNumber('currentWeek')) ?? null;
   return { season, week };
 }
+export async function getMeta(_key: string) { return null; }
+export async function setMeta(_key: string, _value: string) { /* noop */ }
