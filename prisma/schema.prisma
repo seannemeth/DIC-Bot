@@ -1,0 +1,126 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Coach {
+  id         Int      @id @default(autoincrement())
+  discordId  String   @unique
+  handle     String
+  team       String?  @unique
+  conference String?
+  createdAt  DateTime @default(now())
+  gamesHome  Game[]   @relation("home")
+  gamesAway  Game[]   @relation("away")
+  wallet     Wallet?
+  purchases  Purchase[]
+  upgrades   Upgrade[]
+}
+
+model Game {
+  id            Int      @id @default(autoincrement())
+  season        Int
+  week          Int
+  homeCoach     Coach    @relation("home", fields: [homeCoachId], references: [id])
+  homeCoachId   Int
+  awayCoach     Coach    @relation("away", fields: [awayCoachId], references: [id])
+  awayCoachId   Int
+  homeTeam      String
+  awayTeam      String
+  homePts       Int?
+  awayPts       Int?
+  status        String   @default("pending") // pending|confirmed|disputed
+  messageId     String?
+  channelId     String?
+  reportedById  Int?
+  confirmedById Int?
+  playedAt      DateTime @default(now())
+  @@index([season, week, status])
+}
+
+model Wallet {
+  id      Int   @id @default(autoincrement())
+  coachId Int   @unique
+  balance Int   @default(500)
+  season  Int   @default(1)
+  coach   Coach @relation(fields: [coachId], references: [id])
+}
+
+model Line {
+  id        Int      @id @default(autoincrement())
+  season    Int
+  week      Int
+  homeTeam  String
+  awayTeam  String
+  spread    Float?
+  total     Float?
+  homeML    Int?
+  awayML    Int?
+  cutoff    DateTime?
+  createdAt DateTime @default(now())
+  @@index([season, week, homeTeam, awayTeam])
+}
+
+model Bet {
+  id        Int      @id @default(autoincrement())
+  coachId   Int
+  season    Int
+  week      Int
+  gameId    Int?
+  market    String   // SPREAD|ML|TOTAL
+  side      String   // HOME|AWAY|OVER|UNDER
+  line      Float?
+  amount    Int
+  status    String   @default("open") // open|won|lost|push
+  placedAt  DateTime @default(now())
+  settledAt DateTime?
+  payout    Int?
+}
+
+enum ItemType {
+  COINS
+  ATTR
+  TOKEN
+}
+
+model Item {
+  id          Int       @id @default(autoincrement())
+  itemKey     String    @unique
+  name        String
+  description String?
+  price       Int
+  type        ItemType
+  payload     Json?
+  enabled     Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  purchases   Purchase[]
+}
+
+model Purchase {
+  id          Int      @id @default(autoincrement())
+  coachId     Int
+  itemId      Int
+  qty         Int      @default(1)
+  consumed    Int      @default(0)
+  price       Int?
+  note        String?
+  purchasedAt DateTime @default(now())
+  coach Coach @relation(fields: [coachId], references: [id])
+  item  Item  @relation(fields: [itemId], references: [id])
+}
+
+model Upgrade {
+  id        Int      @id @default(autoincrement())
+  coachId   Int
+  attribute String
+  amount    Int
+  season    Int
+  week      Int?
+  note      String?
+  createdAt DateTime @default(now())
+  coach     Coach @relation(fields: [coachId], references: [id])
+}
