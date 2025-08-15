@@ -1,18 +1,32 @@
-// src/ingest/live-notifier.ts
+// src/ingest/attachLiveNotifier.ts
 import { Client, EmbedBuilder, TextChannel } from 'discord.js';
 import { PrismaClient } from '@prisma/client';
 
 type TwitchToken = { access_token: string; expires_at: number };
-const PERIOD_MS = 60_000;
 
+const prisma = new PrismaClient();
+
+// ENV
+const PERIOD_MS = 60_000;
+const DEFAULT_CHANNEL_ID = process.env.LIVE_ALERT_CHANNEL_ID ?? '';
 const YT_KEY = process.env.YOUTUBE_API_KEY ?? '';
 const TW_CLIENT_ID = process.env.TWITCH_CLIENT_ID ?? '';
 const TW_CLIENT_SECRET = process.env.TWITCH_CLIENT_SECRET ?? '';
-const DEFAULT_CHANNEL_ID = process.env.LIVE_ALERT_CHANNEL_ID ?? '';
 
+// In-memory debounce state
 const mem = new Map<string, { isLive: boolean; last?: string }>();
 let twitchToken: TwitchToken | null = null;
 
+type SubRow = {
+  platform: string;          // 'youtube' | 'twitch'
+  channelKey: string;        // YouTube channelId or Twitch login
+  discordChannelId: string | null;
+  displayName: string | null;
+  lastItemId: string | null;
+  isLive: boolean;
+};
+
+// ---------- helpers ----------
 async function getChannel(client: Client, id?: string): Promise<TextChannel | null> {
   const cid = id || DEFAULT_CHANNEL_ID;
   if (!cid) return null;
@@ -38,10 +52,18 @@ function ytLiveUrl(channelId: string) {
   return u.toString();
 }
 
-async function tickYouTube(client: Client, prisma: PrismaClient) {
+async function tickYouTube(client: Client) {
   if (!YT_KEY) return;
-  const subs = await prisma.streamSub.findMany({ where: { platform: 'youtube' } });
-  for (const s of subs) {
+  const subs = await prisma.streamSub.findMany({
+    where: { platform: 'youtube' },
+    select: {
+      platform: true, channelKey: true,
+      discordChannelId: true, displayName: true,
+      lastItemId: true, isLive: true,
+    },
+  });
+
+  for (const s of subs as SubRow[]) {
     try {
       const data = await fetchJson<any>(ytLiveUrl(s.channelKey));
       const item = data.items?.[0];
@@ -56,6 +78,7 @@ async function tickYouTube(client: Client, prisma: PrismaClient) {
         const already = prev.isLive && prev.last === liveId;
         if (!already) {
           mem.set(key, { isLive: true, last: liveId });
+
           await prisma.streamSub.update({
             where: { platform_channelKey: { platform: 'youtube', channelKey: s.channelKey } },
             data: { isLive: true, lastItemId: liveId, displayName: s.displayName ?? channelTitle ?? undefined },
@@ -76,14 +99,14 @@ async function tickYouTube(client: Client, prisma: PrismaClient) {
           }
         }
       } else {
-        mem.set(key, { isLive: false, last: prev.last });
+        if (prev.isLive) mem.set(key, { isLive: false, last: prev.last });
         await prisma.streamSub.update({
           where: { platform_channelKey: { platform: 'youtube', channelKey: s.channelKey } },
           data: { isLive: false },
         });
       }
-    } catch (e) {
-      // quiet log
+    } catch {
+      // swallow errors per-channel (quota or network)
     }
   }
 }
@@ -116,9 +139,17 @@ async function tFetch(path: string, params: Record<string, string | string[]>) {
   return j;
 }
 
-async function tickTwitch(client: Client, prisma: PrismaClient) {
+export async function tickTwitch(client: Client) {
   if (!TW_CLIENT_ID || !TW_CLIENT_SECRET) return;
-  const subs = await prisma.streamSub.findMany({ where: { platform: 'twitch' } });
+  const subs = await prisma.streamSub.findMany({
+    where: { platform: 'twitch' },
+    select: {
+      platform: true, channelKey: true,
+      discordChannelId: true, displayName: true,
+      lastItemId: true, isLive: true,
+    },
+  });
+
   if (!subs.length) return;
 
   const logins = subs.map(s => s.channelKey);
@@ -126,17 +157,17 @@ async function tickTwitch(client: Client, prisma: PrismaClient) {
   const idByLogin = new Map<string, string>();
   const displayByLogin = new Map<string, string>();
   for (const u of users) {
-    idByLogin.set(u.login.toLowerCase(), u.id);
-    displayByLogin.set(u.login.toLowerCase(), u.display_name);
+    idByLogin.set(String(u.login).toLowerCase(), String(u.id));
+    displayByLogin.set(String(u.login).toLowerCase(), String(u.display_name));
   }
   const ids = Array.from(idByLogin.values());
   if (!ids.length) return;
 
   const streams = (await tFetch('streams', { user_id: ids }))?.data ?? [];
   const liveByUserId = new Map<string, any>();
-  for (const s of streams) liveByUserId.set(s.user_id, s);
+  for (const s of streams) liveByUserId.set(String(s.user_id), s);
 
-  for (const sub of subs) {
+  for (const sub of subs as SubRow[]) {
     const userId = idByLogin.get(sub.channelKey.toLowerCase());
     if (!userId) continue;
     const live = liveByUserId.get(userId);
@@ -145,7 +176,7 @@ async function tickTwitch(client: Client, prisma: PrismaClient) {
     const prev = mem.get(key) || { isLive: false };
 
     if (live) {
-      const streamId = live.id as string;
+      const streamId = String(live.id);
       const already = prev.isLive && prev.last === streamId;
       if (!already) {
         mem.set(key, { isLive: true, last: streamId });
@@ -169,7 +200,7 @@ async function tickTwitch(client: Client, prisma: PrismaClient) {
         }
       }
     } else {
-      mem.set(key, { isLive: false, last: prev.last });
+      if (prev.isLive) mem.set(key, { isLive: false, last: prev.last });
       await prisma.streamSub.update({
         where: { platform_channelKey: { platform: 'twitch', channelKey: sub.channelKey } },
         data: { isLive: false },
@@ -178,14 +209,21 @@ async function tickTwitch(client: Client, prisma: PrismaClient) {
   }
 }
 
-export function attachLiveNotifier(client: Client, prisma: PrismaClient) {
+// ---------- public entry ----------
+export function attachLiveNotifier(client: Client) {
   if (!DEFAULT_CHANNEL_ID) {
     console.warn('[live-notifier] LIVE_ALERT_CHANNEL_ID not set: using per-sub channels only.');
   }
+  if (!YT_KEY && (!TW_CLIENT_ID || !TW_CLIENT_SECRET)) {
+    console.warn('[live-notifier] No YouTube or Twitch credentials; notifier disabled.');
+    return;
+  }
+
   const tick = async () => {
-    try { await tickYouTube(client, prisma); } catch {}
-    try { await tickTwitch(client, prisma); } catch {}
+    try { await tickYouTube(client); } catch {}
+    try { await tickTwitch(client); } catch {}
   };
+
   // start now & interval
   tick().catch(() => {});
   setInterval(tick, PERIOD_MS);
