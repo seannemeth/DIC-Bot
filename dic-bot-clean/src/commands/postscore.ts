@@ -142,6 +142,7 @@ export async function handlePostScoreModal(interaction: Interaction) {
     const payload = JSON.parse(Buffer.from(b64, 'base64').toString()) as {
       s: number; w: number; h: string; a: string;
     };
+
     const homePts = parseInt(interaction.fields.getTextInputValue('homePts'), 10);
     const awayPts = parseInt(interaction.fields.getTextInputValue('awayPts'), 10);
 
@@ -150,43 +151,55 @@ export async function handlePostScoreModal(interaction: Interaction) {
       return;
     }
 
-    // Find the game by canonical teams (or swap for your actual primary key if you store game.id)
     const season = payload.s;
     const week = payload.w;
-    const homeKey = canonTeam(payload.h);
-    const awayKey = canonTeam(payload.a);
 
-    // Try both home/away orders just in case data stores the reverse
-    const game = await prisma.game.findFirst({
-      where: {
-        season, week,
-        OR: [
-          { homeTeamKey: homeKey, awayTeamKey: awayKey },
-          { homeTeamKey: awayKey, awayTeamKey: homeKey },
-        ],
+    // Pull all games for the week; match by canonical key in JS
+    const games = await prisma.game.findMany({
+      where: { season, week },
+      select: {
+        id: true,
+        homeTeam: true,
+        awayTeam: true,
+        homePts: true,
+        awayPts: true,
+        status: true,
       },
     });
 
+    const wantedKey = matchupKey(payload.h, payload.a);
+    const game = games.find(g => matchupKey(g.homeTeam, g.awayTeam) === wantedKey);
+
     if (!game) {
-      await interaction.editReply(`❌ Couldn’t find the game record: S${season} W${week} ${sanitizeTeam(payload.h)} vs ${sanitizeTeam(payload.a)}.`);
+      await interaction.editReply(
+        `❌ Couldn’t find the game record: S${season} W${week} ${sanitizeTeam(payload.h)} vs ${sanitizeTeam(payload.a)}.`
+      );
       return;
     }
 
-    // Update game — adjust field names to your schema
+    // Map entered scores to stored home/away order.
+    // If stored homeTeam matches payload.h canonically, then home gets homePts, else swap.
+    const storedHomeIsPayloadHome =
+      canonTeam(game.homeTeam) === canonTeam(payload.h) &&
+      canonTeam(game.awayTeam) === canonTeam(payload.a);
+
+    const nextHomePts = storedHomeIsPayloadHome ? homePts : awayPts;
+    const nextAwayPts = storedHomeIsPayloadHome ? awayPts : homePts;
+
     const updated = await prisma.game.update({
       where: { id: game.id },
       data: {
-        homeTeam: game.homeTeamKey === homeKey ? payload.h : payload.a,
-        awayTeam: game.homeTeamKey === homeKey ? payload.a : payload.h,
-        homeScore: game.homeTeamKey === homeKey ? homePts : awayPts,
-        awayScore: game.homeTeamKey === homeKey ? awayPts : homePts,
-        status: 'confirmed',
-        played: true,
+        homePts: nextHomePts,
+        awayPts: nextAwayPts,
+        status: 'confirmed', // adjust if your enum uses a different value/case
+        // If you also track booleans:
+        // played: true,
       },
+      select: { homeTeam: true, awayTeam: true, homePts: true, awayPts: true },
     });
 
     await interaction.editReply(
-      `✅ Score posted: **${sanitizeTeam(updated.homeTeam)} ${updated.homeScore} — ${sanitizeTeam(updated.awayTeam)} ${updated.awayScore}**`
+      `✅ Score posted: **${sanitizeTeam(updated.homeTeam)} ${updated.homePts} — ${sanitizeTeam(updated.awayTeam)} ${updated.awayPts}**`
     );
   } catch (err: any) {
     console.error('[postscore modal] failed:', err);
