@@ -1,13 +1,13 @@
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, Game } from '@prisma/client';
 const prisma = new PrismaClient();
 
 export type WeekSchedule = {
-  games: any[];
-  played: any[];
-  remaining: any[];
+  games: Game[];
+  played: Game[];
+  remaining: Game[];
 };
 
-function isPlayed(g: any) {
+function isPlayed(g: Game): boolean {
   return (g.homePts != null && g.awayPts != null) || g.status === 'confirmed';
 }
 
