@@ -11,14 +11,15 @@ import { PrismaClient } from '@prisma/client';
 // === Commands ===
 import * as Store from './commands/store';
 import * as Inventory from './commands/inventory';
-import * as Lines from './commands/lines';        // stub or implemented
-import * as PlaceBet from './commands/placebet';  // stub or implemented
+import * as Lines from './commands/lines';
+import * as PlaceBet from './commands/placebet';
 import * as SetTeam from './commands/setteam';
 import * as PostScore from './commands/postscore';
 import * as Standings from './commands/standings';
 import * as Leaderboard from './commands/leaderboard';
 import * as Balance from './commands/balance';
 import * as ResetCoins from './commands/resetcoins';
+import * as PowerRankings from './commands/powerrankings';
 
 // === Emoji score listener ===
 import { attachScoreListener } from './ingest/score-listener';
@@ -46,7 +47,8 @@ const commands = new Collection<string, any>();
   Store,
   Inventory,
   Lines,
-  PlaceBet
+  PlaceBet,
+  PowerRankings
 ].forEach((m: any) => commands.set(m.command.data.name, m.command));
 
 client.once('ready', async () => {
