@@ -1,7 +1,8 @@
 // src/commands/postscore.ts
 import { SlashCommandBuilder, type ChatInputCommandInteraction, EmbedBuilder } from 'discord.js';
 import { PrismaClient } from '@prisma/client';
-import { settleWagersForGame } from '../lib/settle'; // ✅ import at top
+import { settleWagersForGame } from '../lib/settle';
+import { upsertLinesScore } from '../lib/linesWriteback'; // ✅ add this
 
 const prisma = new PrismaClient();
 
@@ -25,44 +26,47 @@ export const command = {
     const homePts = interaction.options.getInteger('home_pts', true);
     const awayPts = interaction.options.getInteger('away_pts', true);
 
-    // Look up coaches by team name (or however you store them)
     const homeCoach = await prisma.coach.findFirst({ where: { team: homeTeam } });
     const awayCoach = await prisma.coach.findFirst({ where: { team: awayTeam } });
     if (!homeCoach || !awayCoach) {
-      await interaction.editReply('❌ Could not find one or both teams in the database. Use /setteam first.');
+      await interaction.editReply('❌ Could not find one or both teams. Use /setteam first.');
       return;
     }
 
-    // Create the game ONCE
+    // DB: save the game
     const created = await prisma.game.create({
       data: {
-        season,
-        week,
+        season, week,
         homeCoachId: homeCoach.id,
         awayCoachId: awayCoach.id,
-        homeTeam,
-        awayTeam,
-        homePts,
-        awayPts,
+        homeTeam, awayTeam,
+        homePts, awayPts,
         status: 'confirmed' as any,
       },
     });
 
-    // Nice confirmation embed
+    // Sheets: write back into Lines
+    try {
+      const res = await upsertLinesScore({ season, week, homeTeam, awayTeam, homePts, awayPts });
+      console.log(`[Lines writeback] ${res.action} row for S${season} W${week} ${homeTeam} vs ${awayTeam}`);
+    } catch (e) {
+      console.error('[Lines writeback] failed:', e);
+      // optional: tell the user non-fatal warning
+      // await interaction.followUp({ content: '⚠️ Wrote score to DB, but failed to update Lines sheet.', ephemeral: true });
+    }
+
+    // Respond
     const embed = new EmbedBuilder()
       .setTitle(`Final: ${homeTeam} ${homePts} — ${awayTeam} ${awayPts}`)
       .setDescription(`Season ${season}, Week ${week}`)
       .setColor(homePts > awayPts ? 0x2ecc71 : (homePts < awayPts ? 0xe74c3c : 0x95a5a6));
-
     await interaction.editReply({ embeds: [embed] });
 
-    // ✅ Auto-settle wagers for this game (ONE call, no redeclare)
+    // Auto-settle bets
     try {
       await settleWagersForGame(created.id);
-      // Optional: follow-up message to confirm settlement ran
-      // await interaction.followUp({ content: `🧾 Settled wagers for Game #${created.id}`, ephemeral: true });
     } catch (e) {
-      console.error('[settle] failed to settle wagers:', e);
+      console.error('[settle] failed:', e);
     }
   },
 } as const;
