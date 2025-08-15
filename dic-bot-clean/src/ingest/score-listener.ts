@@ -1,6 +1,6 @@
 // src/ingest/score-listener.ts
 import { Client, EmbedBuilder, Message } from "discord.js";
-import { PrismaClient, GameStatus } from "@prisma/client";
+import { PrismaClient } from "@prisma/client";
 import { getEmojiMap } from "./emoji-map";
 import { getCurrentSeasonWeek } from "../lib/meta";
 import { settleWagersForGame } from "../lib/settle";
@@ -49,15 +49,13 @@ export function attachScoreListener(client: Client, prisma: PrismaClient) {
       const scoreMatch = text.match(SCORE);
       if (!scoreMatch) return;
 
-      const s1 = Number(scoreMatch[1]),
-        s2 = Number(scoreMatch[2]);
+      const s1 = Number(scoreMatch[1]);
+      const s2 = Number(scoreMatch[2]);
       if (!Number.isFinite(s1) || !Number.isFinite(s2)) return;
 
       const map = await getEmojiMap();
-      const e1 = emojis[0],
-        e2 = emojis[1];
-      const team1 = map[e1.id],
-        team2 = map[e2.id];
+      const e1 = emojis[0], e2 = emojis[1];
+      const team1 = map[e1.id], team2 = map[e2.id];
 
       if (!team1 || !team2) {
         await msg.reply({
@@ -90,7 +88,7 @@ export function attachScoreListener(client: Client, prisma: PrismaClient) {
         return;
       }
 
-      // Upsert the game for this Season/Week/Matchup, and AUTO‑CONFIRM
+      // Upsert the game for this Season/Week/Matchup, and AUTO-CONFIRM
       const game = await prisma.game.upsert({
         where: {
           season_week_homeTeam_awayTeam: {
@@ -107,7 +105,7 @@ export function attachScoreListener(client: Client, prisma: PrismaClient) {
           awayTeam,
           homePts,
           awayPts,
-          status: GameStatus.confirmed, // auto-confirm here
+          status: "confirmed" as any, // auto-confirm here
           homeCoachId: homeCoach.id,
           awayCoachId: awayCoach.id,
           reportedById: homeCoach.id,
@@ -117,7 +115,7 @@ export function attachScoreListener(client: Client, prisma: PrismaClient) {
         update: {
           homePts,
           awayPts,
-          status: GameStatus.confirmed, // auto-confirm on update too
+          status: "confirmed" as any, // auto-confirm on update too
           homeCoachId: homeCoach.id,
           awayCoachId: awayCoach.id,
           reportedById: homeCoach.id,
