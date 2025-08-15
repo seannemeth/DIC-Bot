@@ -1,5 +1,5 @@
 import { SlashCommandBuilder, type ChatInputCommandInteraction, EmbedBuilder } from 'discord.js';
-import { getWeekSchedule } from '../lib/schedule';
+import { getWeekSchedule } from '../lib/schedules';
 
 export const command = {
   data: new SlashCommandBuilder()
@@ -16,7 +16,7 @@ export const command = {
     const { played, remaining } = await getWeekSchedule(season, week);
 
     const lines = (arr: any[]) => arr.length
-      ? arr.map(g => g.status === 'confirmed'
+      ? arr.map((g: any) => g.status === 'confirmed'
           ? `✅ **${g.homeTeam} ${g.homePts} — ${g.awayTeam} ${g.awayPts}**`
           : `⏳ ${g.homeTeam} vs ${g.awayTeam}`).join('\n')
       : '_None_';
