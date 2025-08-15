@@ -121,7 +121,24 @@ export const command = {
           status: 'confirmed' as any,
         },
       });
+import { settleWagersForGame } from '../lib/settle';
 
+// ... inside execute(), AFTER creating `game` ...
+const game = await prisma.game.create({ data: {
+  season, week,
+  homeCoachId: homeCoach.id,
+  awayCoachId: awayCoach.id,
+  homeTeam, awayTeam,
+  homePts, awayPts,
+  status: 'confirmed' as any,
+}});
+
+// Auto-settle wagers for this matchup
+try {
+  await settleWagersForGame(game.id);
+} catch (e) {
+  console.error('[settle] failed to settle wagers:', e);
+}
       // Optional: coin award (winner +500)
       if (homePts !== awayPts) {
         const winnerId = awayPts > homePts ? awayCoach.id : homeCoach.id;
