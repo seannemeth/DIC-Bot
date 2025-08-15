@@ -23,26 +23,32 @@ model Coach {
   upgrades   Upgrade[]
 }
 
-model Game {
-  id            Int      @id @default(autoincrement())
-  season        Int
-  week          Int
-  homeCoach     Coach    @relation("home", fields: [homeCoachId], references: [id])
-  homeCoachId   Int
-  awayCoach     Coach    @relation("away", fields: [awayCoachId], references: [id])
-  awayCoachId   Int
-  homeTeam      String
-  awayTeam      String
-  homePts       Int?
-  awayPts       Int?
-  status        String   @default("pending") // pending|confirmed|disputed
-  messageId     String?
-  channelId     String?
-  reportedById  Int?
-  confirmedById Int?
-  playedAt      DateTime @default(now())
+// --- add if missing ---
+enum GameStatus {
+  scheduled
+  confirmed
+}
 
-  @@index([season, week, status])
+// --- replace your existing Game model with this ---
+model Game {
+  id           String     @id @default(cuid())
+  season       Int
+  week         Int
+  homeTeam     String
+  awayTeam     String
+  homePts      Int?       // null until confirmed
+  awayPts      Int?       // null until confirmed
+  status       GameStatus @default(scheduled)
+
+  // Optional so you can import a schedule before coaches are set
+  homeCoachId  String?
+  awayCoachId  String?
+
+  // If you have Coach model/relations, keep them optional like this:
+  // homeCoach    Coach?   @relation(fields: [homeCoachId], references: [id])
+  // awayCoach    Coach?   @relation(fields: [awayCoachId], references: [id])
+
+  @@unique([season, week, homeTeam, awayTeam]) // composite unique used by upserts
 }
 
 model Wallet {
