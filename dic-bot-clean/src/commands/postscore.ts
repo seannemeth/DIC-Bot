@@ -1,4 +1,3 @@
-// src/commands/postscore.ts
 import { SlashCommandBuilder, type ChatInputCommandInteraction, EmbedBuilder } from 'discord.js';
 import { PrismaClient } from '@prisma/client';
 import { settleWagersForGame } from '../lib/settle';
@@ -33,9 +32,9 @@ export const command = {
       return;
     }
 
-    // Upsert the scheduled game row -> confirmed with scores
+    // Upsert scheduled row -> confirmed with scores
     const game = await prisma.game.upsert({
-      where: { game_unique: { season, week, homeTeam, awayTeam } },
+      where: { season_week_homeTeam_awayTeam: { season, week, homeTeam, awayTeam } },
       create: {
         season, week, homeTeam, awayTeam,
         homePts, awayPts,
@@ -51,7 +50,7 @@ export const command = {
       },
     });
 
-    // Sheets: write back into Lines
+    // Sheets writeback to Lines (non-fatal if it fails)
     try {
       const res = await upsertLinesScore({ season, week, homeTeam, awayTeam, homePts, awayPts });
       console.log(`[Lines writeback] ${res.action} row for S${season} W${week} ${homeTeam} vs ${awayTeam}`);
