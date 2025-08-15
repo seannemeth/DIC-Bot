@@ -4,7 +4,7 @@ import {
   Client,
   GatewayIntentBits,
   Collection,
-  Interaction
+  Interaction,
 } from 'discord.js';
 import { PrismaClient } from '@prisma/client';
 
@@ -36,8 +36,8 @@ const client = new Client({
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
     // Keep this ON only if you enabled "Message Content Intent" in the Dev Portal
-    GatewayIntentBits.MessageContent
-  ]
+    GatewayIntentBits.MessageContent,
+  ],
 });
 
 // Utility to normalize different export styles
@@ -79,6 +79,47 @@ for (const m of modules) {
   }
 }
 
+// ---- helpers to fix option order and debug offending commands ----
+type CmdJSON = {
+  name: string;
+  description?: string;
+  options?: any[];
+  type?: number;
+};
+
+function sortOptionsRequiredFirst(options?: any[]): any[] | undefined {
+  if (!Array.isArray(options)) return options;
+  const req = options.filter(o => o?.required === true);
+  const opt = options.filter(o => o?.required !== true);
+  return [...req, ...opt];
+}
+
+function fixOptionsOrderRecursive(node: any): any {
+  if (!node || typeof node !== 'object') return node;
+  const out = { ...node };
+  if (Array.isArray(out.options)) {
+    out.options = out.options.map((child: any) => fixOptionsOrderRecursive(child));
+    out.options = sortOptionsRequiredFirst(out.options);
+  }
+  return out;
+}
+
+function summarizeOptions(node: any, prefix = ''): string[] {
+  const lines: string[] = [];
+  const opts: any[] = Array.isArray(node?.options) ? node.options : [];
+  if (opts.length) {
+    lines.push(`${prefix}options (${opts.length}): ${opts.map(o => `${o.name}${o.required ? '*' : ''}`).join(', ')}`);
+    for (const child of opts) {
+      // 1 = SUB_COMMAND, 2 = SUB_COMMAND_GROUP
+      if (child?.type === 1 || child?.type === 2) {
+        lines.push(...summarizeOptions(child, prefix + '  '));
+      }
+    }
+  }
+  return lines;
+}
+// ------------------------------------------------------------------
+
 client.once('ready', async () => {
   console.log(`Logged in as ${client.user?.tag}`);
 
@@ -91,11 +132,20 @@ client.once('ready', async () => {
     }
   }
 
-  // Register slash commands per guild
+  // Register slash commands per guild with required-first option ordering
   try {
-    const body = Array.from(commands.values()).map((c: any) => c.data.toJSON());
+    const list = Array.from(commands.values());
+    const rawBodies: CmdJSON[] = list.map((c: any) => c.data.toJSON());
+    const fixedBodies: CmdJSON[] = rawBodies.map(fixOptionsOrderRecursive);
+
+    console.log('[SLASH] Command ordering preview:');
+    fixedBodies.forEach((b, i) => {
+      console.log(`  ${i}. /${b.name}`);
+      summarizeOptions(b).forEach(line => console.log('     ' + line));
+    });
+
     for (const [, guild] of client.guilds.cache) {
-      await guild.commands.set(body);
+      await guild.commands.set(fixedBodies as any);
       console.log(`[SLASH] Registered commands for guild: ${guild.name}`);
     }
   } catch (e) {
