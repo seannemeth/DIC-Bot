@@ -23,6 +23,8 @@ import * as PowerRankings from './commands/powerrankings';
 import * as Settle from './commands/settle';
 import * as Buy from './commands/buy';
 import * as Redeem from './commands/redeem';
+import { command as schedule } from './schedule';
+import { command as scheduleImport } from './scheduleImport';
 
 // === Emoji score listener ===
 import { attachScoreListener } from './ingest/score-listener';
@@ -54,7 +56,9 @@ const commands = new Collection<string, any>();
   PowerRankings,
   Settle,
   Buy,
-  Redeem
+  Redeem,
+  schedule,
+  scheduleImport,
 ].forEach((m: any) => commands.set(m.command.data.name, m.command));
 
 client.once('ready', async () => {
