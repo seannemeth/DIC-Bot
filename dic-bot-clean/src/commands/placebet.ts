@@ -8,13 +8,12 @@ import { openSheetByTitle } from '../lib/googleAuth';
 import { PrismaClient } from '@prisma/client';
 const prisma = new PrismaClient();
 
-// Helpers
 type LineRow = {
-  GameId: string;
-  Season: string | number;
-  Week: string | number;
-  HomeTeam: string;
-  AwayTeam: string;
+  GameId?: string;
+  Season?: string | number;
+  Week?: string | number;
+  HomeTeam?: string;
+  AwayTeam?: string;
   Spread?: string | number;
   SpreadOdds?: string | number;
   Total?: string | number;
@@ -22,31 +21,57 @@ type LineRow = {
   HomeML?: string | number;
   AwayML?: string | number;
   Cutoff?: string;
+  _key: string;      // S|W|Home|Away
+  _label: string;    // "S1 W1: Home vs Away (ID ...)"
+  _value: string;    // "ID:123" or "KEY:S|W|Home|Away"
 };
 
 async function getLines(): Promise<LineRow[]> {
   const sheetId = process.env.GOOGLE_SHEET_ID || '';
+  if (!sheetId) throw new Error('GOOGLE_SHEET_ID not set');
+
   const sheet = await openSheetByTitle(sheetId, 'Lines');
   const rows: any[] = await sheet.getRows();
-  return rows.map((r: any) => ({
-    GameId: String(r.GameId ?? ''),
-    Season: r.Season,
-    Week: r.Week,
-    HomeTeam: r.HomeTeam,
-    AwayTeam: r.AwayTeam,
-    Spread: r.Spread,
-    SpreadOdds: r.SpreadOdds,
-    Total: r.Total,
-    TotalOdds: r.TotalOdds,
-    HomeML: r.HomeML,
-    AwayML: r.AwayML,
-    Cutoff: r.Cutoff,
-  }));
+
+  const out: LineRow[] = rows.map((r: any) => {
+    const season = r.Season ?? '';
+    const week = r.Week ?? '';
+    const home = r.HomeTeam ?? '';
+    const away = r.AwayTeam ?? '';
+    const id = r.GameId ? String(r.GameId) : undefined;
+
+    const key = `${season}|${week}|${home}|${away}`;
+    const label = `S${season || '?'} W${week || '?'}: ${home || '?'} vs ${away || '?'}${
+      id ? ` (ID ${id})` : ''
+    }`;
+    const value = id ? `ID:${id}` : `KEY:${key}`;
+
+    return {
+      GameId: id,
+      Season: season,
+      Week: week,
+      HomeTeam: home,
+      AwayTeam: away,
+      Spread: r.Spread,
+      SpreadOdds: r.SpreadOdds,
+      Total: r.Total,
+      TotalOdds: r.TotalOdds,
+      HomeML: r.HomeML,
+      AwayML: r.AwayML,
+      Cutoff: r.Cutoff,
+      _key: key,
+      _label: label,
+      _value: value,
+    };
+  });
+
+  // Filter obvious empties
+  return out.filter(r => (r.HomeTeam || '').trim() && (r.AwayTeam || '').trim());
 }
 
 function toNumber(x: any, fallback?: number) {
   const n = Number(x);
-  return Number.isFinite(n) ? n : fallback;
+  return Number.isFinite(n) ? n : (fallback as number | undefined);
 }
 
 function nowUtcISO() {
@@ -57,11 +82,10 @@ export const command = {
   data: new SlashCommandBuilder()
     .setName('placebet')
     .setDescription('Place a bet on a listed game')
-    // Dynamic game picker via autocomplete (value = GameId)
     .addStringOption(o =>
       o
         .setName('game')
-        .setDescription('Pick a game (from /lines)')
+        .setDescription('Pick a game (from Lines)')
         .setAutocomplete(true)
         .setRequired(true),
     )
@@ -96,26 +120,32 @@ export const command = {
         .setRequired(true),
     ),
 
-  // ---------- AUTOCOMPLETE: builds choices from the Lines sheet ----------
+  // ---------- AUTOCOMPLETE ----------
   async autocomplete(interaction: AutocompleteInteraction) {
-    const focused = interaction.options.getFocused(true);
-    if (focused.name !== 'game') return;
     try {
-      const rows = await getLines();
-      const q = String(focused.value || '').toLowerCase();
+      const focused = interaction.options.getFocused(true);
+      if (focused.name !== 'game') return;
 
-      // Build label like "S1 W1: Georgia vs Alabama  (ID 1)"
-      // Limit to 25 choices (Discord max)
+      const q = String(focused.value || '').toLowerCase();
+      const rows = await getLines();
+
+      if (!rows.length) {
+        await interaction.respond([{ name: 'No lines found (check sheet/tab share & headers)', value: 'NONE' }]);
+        return;
+      }
+
       const choices = rows
-        .filter(r => r.GameId) // must have an ID
-        .map(r => {
-          const season = r.Season ?? '?';
-          const week = r.Week ?? '?';
-          const label = `S${season} W${week}: ${r.HomeTeam} vs ${r.AwayTeam} (ID ${r.GameId})`;
-          return { name: label, value: String(r.GameId) };
+        .filter(r => {
+          if (!q) return true;
+          return r._label.toLowerCase().includes(q) ||
+                 String(r.Season ?? '').toLowerCase().includes(q) ||
+                 String(r.Week ?? '').toLowerCase().includes(q) ||
+                 (r.HomeTeam ?? '').toLowerCase().includes(q) ||
+                 (r.AwayTeam ?? '').toLowerCase().includes(q) ||
+                 (r.GameId ?? '').toLowerCase().includes(q);
         })
-        .filter(c => c.name.toLowerCase().includes(q))
-        .slice(0, 25);
+        .slice(0, 25)
+        .map(r => ({ name: r._label, value: r._value }));
 
       await interaction.respond(choices.length ? choices : [{ name: 'No matches', value: 'NONE' }]);
     } catch (e) {
@@ -123,21 +153,21 @@ export const command = {
     }
   },
 
-  // ---------- EXECUTE: validates balance, odds, cutoff; writes Wagers; debits wallet ----------
+  // ---------- EXECUTE ----------
   async execute(interaction: ChatInputCommandInteraction) {
     await interaction.deferReply({ ephemeral: true });
 
-    const gameId = interaction.options.getString('game', true);
+    const gameVal = interaction.options.getString('game', true);
     const market = interaction.options.getString('market', true) as 'SPREAD' | 'TOTAL' | 'ML';
     const selection = interaction.options.getString('selection', true) as 'HOME' | 'AWAY' | 'OVER' | 'UNDER';
     const stake = interaction.options.getInteger('stake', true);
 
-    if (gameId === 'NONE') {
+    if (gameVal === 'NONE') {
       await interaction.editReply('❌ Please pick a valid game from the list.');
       return;
     }
 
-    // Find user/coach + wallet
+    // User wallet
     const discordId = interaction.user.id;
     const coach = await prisma.coach.findUnique({ where: { discordId } });
     if (!coach) {
@@ -146,7 +176,7 @@ export const command = {
     }
     const wallet = await prisma.wallet.upsert({
       where: { coachId: coach.id },
-      create: { coachId: coach.id, balance: 500 }, // initial if not exists
+      create: { coachId: coach.id, balance: 500 },
       update: {},
     });
     if (wallet.balance < stake) {
@@ -154,11 +184,23 @@ export const command = {
       return;
     }
 
-    // Fetch the selected game from Lines
+    // Find the specific game row
     const rows = await getLines();
-    const row = rows.find(r => String(r.GameId) === String(gameId));
+    let row: LineRow | undefined;
+
+    if (gameVal.startsWith('ID:')) {
+      const id = gameVal.slice(3);
+      row = rows.find(r => (r.GameId ?? '') === id);
+    } else if (gameVal.startsWith('KEY:')) {
+      const key = gameVal.slice(4);
+      row = rows.find(r => r._key === key);
+    } else {
+      // legacy fallback: treat as GameId literal
+      row = rows.find(r => (r.GameId ?? '') === gameVal);
+    }
+
     if (!row) {
-      await interaction.editReply('❌ Game not found in Lines sheet.');
+      await interaction.editReply('❌ Selected game not found in Lines sheet.');
       return;
     }
 
@@ -171,9 +213,9 @@ export const command = {
       }
     }
 
-    // Determine odds + line for the chosen market
-    let usedOdds = -110; // default
-    let usedLine: number | undefined = undefined;
+    // Work out odds/line
+    let usedOdds = -110;
+    let usedLine: number | undefined;
 
     if (market === 'SPREAD') {
       usedLine = toNumber(row.Spread);
@@ -208,12 +250,11 @@ export const command = {
 
     const season = Number(row.Season) || 0;
     const week = Number(row.Week) || 0;
-    const homeTeam = row.HomeTeam;
-    const awayTeam = row.AwayTeam;
+    const homeTeam = row.HomeTeam || 'Home';
+    const awayTeam = row.AwayTeam || 'Away';
 
-    // Write to Wagers sheet, debit DB wallet
+    // Write to Wagers sheet + debit wallet
     try {
-      // Sheets write
       const sheetId = process.env.GOOGLE_SHEET_ID || '';
       const wagersSheet = await openSheetByTitle(sheetId, 'Wagers');
       const betId = `${Date.now()}_${discordId.slice(-4)}`;
@@ -236,10 +277,9 @@ export const command = {
         Result: '',
         Payout: '',
         BetId: betId,
-        MessageLink: '', // you can fill with interaction.url if you echo in a public channel
+        MessageLink: '',
       });
 
-      // DB debit
       await prisma.wallet.update({
         where: { coachId: coach.id },
         data: { balance: { decrement: stake } },
@@ -257,7 +297,7 @@ export const command = {
       );
     } catch (e: any) {
       console.error('[placebet] error:', e);
-      await interaction.editReply('⚠️ Could not record your bet. Try again in a minute.');
+      await interaction.editReply('⚠️ Could not record your bet. Check sheet sharing & headers, then try again.');
     }
   },
 } as const;
