@@ -1,6 +1,10 @@
 // src/commands/livealerts.ts
 import {
-  SlashCommandBuilder, type ChatInputCommandInteraction, PermissionFlagsBits,
+  SlashCommandBuilder,
+  type ChatInputCommandInteraction,
+  PermissionFlagsBits,
+  ChannelType,
+  type GuildBasedChannel,
 } from 'discord.js';
 import { PrismaClient } from '@prisma/client';
 
@@ -10,29 +14,43 @@ function isAdmin(i: ChatInputCommandInteraction) {
   return Boolean(i.memberPermissions?.has(PermissionFlagsBits.Administrator));
 }
 
-async function resolveYouTubeChannelId(input: string, apiKey?: string): Promise<{ id?: string; title?: string }> {
+/** Row type for listing subscriptions (matches fields we read) */
+type StreamSubRow = {
+  platform: string;
+  channelKey: string;
+  ownerDiscordId: string;
+  discordChannelId: string | null;
+  displayName: string | null;
+};
+
+async function resolveYouTubeChannelId(
+  input: string,
+  apiKey?: string
+): Promise<{ id?: string; title?: string }> {
   const key = apiKey || process.env.YOUTUBE_API_KEY;
   if (!key) return {};
-  // Accept full URL or @handle or raw id
+
   const trimmed = input.trim();
-  // If it already looks like a channelId
+
+  // Already a channel ID?
   if (/^UC[0-9A-Za-z_-]{22}$/.test(trimmed)) return { id: trimmed };
 
-  // Extract from URL if possible
+  // Extract from URL if present
   try {
     if (trimmed.startsWith('http')) {
       const u = new URL(trimmed);
-      // /channel/UCxxxx
       const parts = u.pathname.split('/').filter(Boolean);
       const chIdx = parts.indexOf('channel');
       if (chIdx >= 0 && parts[chIdx + 1] && /^UC/.test(parts[chIdx + 1])) {
         return { id: parts[chIdx + 1] };
       }
-      // handle -> need search: type=channel, q=@handle
+      // Otherwise, we'll fall back to search (handles @handles and names)
     }
-  } catch {}
+  } catch {
+    // ignore URL parse issues; we fall back to search
+  }
 
-  // Use search to resolve handle or name
+  // Use search to resolve handle/name -> channelId
   const url = new URL('https://www.googleapis.com/youtube/v3/search');
   url.searchParams.set('part', 'snippet');
   url.searchParams.set('type', 'channel');
@@ -52,9 +70,12 @@ async function resolveYouTubeChannelId(input: string, apiKey?: string): Promise<
 async function resolveTwitchLogin(input: string): Promise<{ login?: string; display?: string }> {
   const login = input.replace(/^https?:\/\/(www\.)?twitch\.tv\//i, '').trim().toLowerCase();
   if (!login) return {};
+
   const clientId = process.env.TWITCH_CLIENT_ID!;
   const clientSecret = process.env.TWITCH_CLIENT_SECRET!;
-  // app token
+  if (!clientId || !clientSecret) return { login };
+
+  // App token
   const tokenRes = await fetch('https://id.twitch.tv/oauth2/token', {
     method: 'POST',
     body: new URLSearchParams({
@@ -70,7 +91,7 @@ async function resolveTwitchLogin(input: string): Promise<{ login?: string; disp
   const u = new URL('https://api.twitch.tv/helix/users');
   u.searchParams.set('login', login);
   const res = await fetch(u.toString(), {
-    headers: { 'Client-Id': clientId, 'Authorization': `Bearer ${access}` },
+    headers: { 'Client-Id': clientId, Authorization: `Bearer ${access}` },
   });
   const json = await res.json();
   const user = json?.data?.[0];
@@ -82,21 +103,63 @@ export const command = {
     .setName('livealerts')
     .setDescription('Manage live stream notifications')
     // /livealerts add platform:<youtube|twitch> id:<id/url/handle> [channel:#channel]
-    .addSubcommand(sc => sc.setName('add').setDescription('Subscribe your stream')
-      .addStringOption(o => o.setName('platform').setDescription('youtube or twitch').setRequired(true)
-        .addChoices({ name: 'youtube', value: 'youtube' }, { name: 'twitch', value: 'twitch' }))
-      .addStringOption(o => o.setName('id').setDescription('YouTube channel URL/ID/handle or Twitch URL/login').setRequired(true))
-      .addChannelOption(o => o.setName('channel').setDescription('Discord channel for your alerts')))
+    .addSubcommand((sc) =>
+      sc
+        .setName('add')
+        .setDescription('Subscribe your stream')
+        .addStringOption((o) =>
+          o
+            .setName('platform')
+            .setDescription('youtube or twitch')
+            .setRequired(true)
+            .addChoices({ name: 'youtube', value: 'youtube' }, { name: 'twitch', value: 'twitch' })
+        )
+        .addStringOption((o) =>
+          o
+            .setName('id')
+            .setDescription('YouTube channel URL/ID/handle or Twitch URL/login')
+            .setRequired(true)
+        )
+        .addChannelOption((o) =>
+          o
+            .setName('channel')
+            .setDescription('Discord channel for your alerts')
+        )
+    )
     // /livealerts remove platform:<...> id:<...>
-    .addSubcommand(sc => sc.setName('remove').setDescription('Unsubscribe your stream')
-      .addStringOption(o => o.setName('platform').setDescription('youtube or twitch').setRequired(true)
-        .addChoices({ name: 'youtube', value: 'youtube' }, { name: 'twitch', value: 'twitch' }))
-      .addStringOption(o => o.setName('id').setDescription('YouTube channel URL/ID/handle or Twitch URL/login').setRequired(true)))
+    .addSubcommand((sc) =>
+      sc
+        .setName('remove')
+        .setDescription('Unsubscribe your stream')
+        .addStringOption((o) =>
+          o
+            .setName('platform')
+            .setDescription('youtube or twitch')
+            .setRequired(true)
+            .addChoices({ name: 'youtube', value: 'youtube' }, { name: 'twitch', value: 'twitch' })
+        )
+        .addStringOption((o) =>
+          o
+            .setName('id')
+            .setDescription('YouTube channel URL/ID/handle or Twitch URL/login')
+            .setRequired(true)
+        )
+    )
     // /livealerts list
-    .addSubcommand(sc => sc.setName('list').setDescription('List your subscriptions'))
+    .addSubcommand((sc) => sc.setName('list').setDescription('List your subscriptions'))
     // /livealerts set-default-channel #channel   (admin)
-    .addSubcommand(sc => sc.setName('set-default-channel').setDescription('Set server default alerts channel (admin)')
-      .addChannelOption(o => o.setName('channel').setDescription('Channel to post alerts when user didn’t set one').setRequired(true))),
+    .addSubcommand((sc) =>
+      sc
+        .setName('set-default-channel')
+        .setDescription('Set server default alerts channel (admin)')
+        .addChannelOption((o) =>
+          o
+            .setName('channel')
+            .setDescription('Channel to post alerts when user didn’t set one')
+            .setRequired(true)
+        )
+    ),
+
   async execute(interaction: ChatInputCommandInteraction) {
     await interaction.deferReply({ ephemeral: true });
     const sub = interaction.options.getSubcommand();
@@ -106,8 +169,21 @@ export const command = {
         await interaction.editReply('❌ Admin only.');
         return;
       }
-      const ch = interaction.options.getChannel('channel', true);
-      process.env.LIVE_ALERT_CHANNEL_ID = ch.id; // simple in-memory set; persist in DB/config if you prefer
+      const ch = interaction.options.getChannel('channel', true) as GuildBasedChannel;
+      // Only allow text-based guild channels
+      if (
+        ![
+          ChannelType.GuildText,
+          ChannelType.GuildAnnouncement,
+          ChannelType.PublicThread,
+          ChannelType.PrivateThread,
+          ChannelType.AnnouncementThread,
+        ].includes(ch.type)
+      ) {
+        await interaction.editReply('❌ Please choose a text channel.');
+        return;
+      }
+      process.env.LIVE_ALERT_CHANNEL_ID = ch.id; // in-memory; persist in DB if desired
       await interaction.editReply(`✅ Default alerts channel set to <#${ch.id}>`);
       return;
     }
@@ -115,7 +191,7 @@ export const command = {
     if (sub === 'add') {
       const platform = interaction.options.getString('platform', true) as 'youtube' | 'twitch';
       const rawId = interaction.options.getString('id', true);
-      const channel = interaction.options.getChannel('channel') as any | null;
+      const channel = interaction.options.getChannel('channel') as GuildBasedChannel | null;
       const discordChannelId = channel?.id ?? null;
 
       let channelKey = '';
@@ -123,17 +199,27 @@ export const command = {
 
       if (platform === 'youtube') {
         const { id, title } = await resolveYouTubeChannelId(rawId);
-        if (!id) { await interaction.editReply('❌ Could not resolve that YouTube channel. Provide a channel URL, @handle, or channel ID.'); return; }
+        if (!id) {
+          await interaction.editReply(
+            '❌ Could not resolve that YouTube channel. Provide a channel URL, @handle, or channel ID.'
+          );
+          return;
+        }
         channelKey = id;
         displayName = title;
       } else {
         const { login, display } = await resolveTwitchLogin(rawId);
-        if (!login) { await interaction.editReply('❌ Could not resolve that Twitch user. Provide a channel URL or username.'); return; }
+        if (!login) {
+          await interaction.editReply(
+            '❌ Could not resolve that Twitch user. Provide a channel URL or username.'
+          );
+          return;
+        }
         channelKey = login;
         displayName = display;
       }
 
-      const subRow = await prisma.streamSub.upsert({
+      await prisma.streamSub.upsert({
         where: { platform_channelKey: { platform, channelKey } },
         update: {
           ownerDiscordId: interaction.user.id,
@@ -149,7 +235,10 @@ export const command = {
         },
       });
 
-      await interaction.editReply(`✅ Subscribed **${displayName ?? channelKey}** on **${platform}**.\nAlerts will post in: ${discordChannelId ? `<#${discordChannelId}>` : `<#${process.env.LIVE_ALERT_CHANNEL_ID}> (default)`}`);
+      await interaction.editReply(
+        `✅ Subscribed **${displayName ?? channelKey}** on **${platform}**.\n` +
+          `Alerts will post in: ${discordChannelId ? `<#${discordChannelId}>` : `<#${process.env.LIVE_ALERT_CHANNEL_ID}> (default)`}`
+      );
       return;
     }
 
@@ -169,25 +258,48 @@ export const command = {
       const row = await prisma.streamSub.findUnique({
         where: { platform_channelKey: { platform, channelKey: key } },
       });
-      if (!row) { await interaction.editReply('❌ No subscription found.'); return; }
+
+      if (!row) {
+        await interaction.editReply('❌ No subscription found.');
+        return;
+      }
       if (row.ownerDiscordId !== interaction.user.id && !isAdmin(interaction)) {
         await interaction.editReply('❌ You can only remove your own subscriptions (or be an admin).');
         return;
       }
-      await prisma.streamSub.delete({ where: { platform_channelKey: { platform, channelKey: key } } });
+
+      await prisma.streamSub.delete({
+        where: { platform_channelKey: { platform, channelKey: key } },
+      });
+
       await interaction.editReply(`✅ Unsubscribed **${key}** from **${platform}** alerts.`);
       return;
     }
 
     if (sub === 'list') {
-      const mine = await prisma.streamSub.findMany({
+      const mine: StreamSubRow[] = await prisma.streamSub.findMany({
         where: { ownerDiscordId: interaction.user.id },
         orderBy: [{ platform: 'asc' }, { channelKey: 'asc' }],
+        select: {
+          platform: true,
+          channelKey: true,
+          ownerDiscordId: true,
+          discordChannelId: true,
+          displayName: true,
+        },
       });
-      if (!mine.length) { await interaction.editReply('You have no live alert subscriptions yet. Try `/livealerts add`.'); return; }
-      const lines = mine.map(m =>
-        `• **${m.platform}** — ${m.displayName ?? m.channelKey} ${m.discordChannelId ? `(→ <#${m.discordChannelId}>)` : '(default channel)'}`
+
+      if (!mine.length) {
+        await interaction.editReply('You have no live alert subscriptions yet. Try `/livealerts add`.');
+        return;
+      }
+
+      const lines = mine.map((m: StreamSubRow) =>
+        `• **${m.platform}** — ${m.displayName ?? m.channelKey} ${
+          m.discordChannelId ? `(→ <#${m.discordChannelId}>)` : '(default channel)'
+        }`
       );
+
       await interaction.editReply(lines.join('\n'));
       return;
     }
