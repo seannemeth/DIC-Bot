@@ -1,4 +1,3 @@
-// src/lib/googleAuth.ts
 import { google, sheets_v4 } from 'googleapis';
 
 function decodeBase64Json(b64: string) {
@@ -47,8 +46,11 @@ export async function getSheetsClient(): Promise<sheets_v4.Sheets> {
 }
 
 /**
- * Legacy helper: open a tab by title and expose convenience methods.
- * Returns: { sheets, spreadsheetId, sheetId, title, getRows(), addRow(values) }
+ * Open a tab by title and expose convenience methods compatible with older code:
+ * - getRows(rangeA1?: string)
+ * - getRows({ range?: string, limit?: number })
+ * - addRow(values: (string|number|null)[])
+ * - addRow(record: Record<string, any>)  // maps object to columns via header row
  */
 export async function openSheetByTitle(spreadsheetId: string, title: string) {
   const sheets = await getSheetsClient();
@@ -63,19 +65,64 @@ export async function openSheetByTitle(spreadsheetId: string, title: string) {
 
   const sheetId = sheet.properties.sheetId;
 
-  async function getRows(rangeA1?: string): Promise<string[][]> {
-    const range = rangeA1 ?? `${title}!A:Z`;
-    const resp = await sheets.spreadsheets.values.get({ spreadsheetId, range });
-    return resp.data.values ?? [];
+  async function fetchHeader(): Promise<string[]> {
+    const resp = await sheets.spreadsheets.values.get({
+      spreadsheetId,
+      range: `${title}!1:1`,
+    });
+    return (resp.data.values?.[0] ?? []).map(v => (v ?? '').toString().trim());
   }
 
-  async function addRow(values: (string | number | null)[]) {
+  async function getRows(
+    arg?: string | { range?: string; limit?: number }
+  ): Promise<string[][]> {
+    let range = `${title}!A:Z`;
+    let limit: number | undefined;
+
+    if (typeof arg === 'string' && arg) {
+      range = arg.includes('!') ? arg : `${title}!${arg}`;
+    } else if (typeof arg === 'object' && arg !== null) {
+      if (arg.range) {
+        range = arg.range.includes('!') ? arg.range : `${title}!${arg.range}`;
+      }
+      if (typeof arg.limit === 'number') {
+        limit = arg.limit;
+      }
+    }
+
+    const resp = await sheets.spreadsheets.values.get({ spreadsheetId, range });
+    const values = resp.data.values ?? [];
+    return typeof limit === 'number' ? values.slice(0, Math.max(0, limit)) : values;
+  }
+
+  async function addRow(
+    valuesOrRecord: (string | number | null)[] | Record<string, any>
+  ) {
+    // If it's an object, map it to the header order
+    let row: (string | number | null)[];
+
+    if (Array.isArray(valuesOrRecord)) {
+      row = valuesOrRecord;
+    } else if (valuesOrRecord && typeof valuesOrRecord === 'object') {
+      const header = await fetchHeader();
+      // Build a row aligning to the header columns (exact header text match)
+      row = header.map(h => {
+        const v = (valuesOrRecord as Record<string, any>)[h];
+        if (v === undefined) return null;
+        if (v === null) return null;
+        if (typeof v === 'number') return v;
+        return v.toString();
+      });
+    } else {
+      throw new Error('addRow expects an array of values or a record object');
+    }
+
     await sheets.spreadsheets.values.append({
       spreadsheetId,
       range: `${title}!A:Z`,
       valueInputOption: 'USER_ENTERED',
       insertDataOption: 'INSERT_ROWS',
-      requestBody: { values: [values] },
+      requestBody: { values: [row] },
     });
   }
 
