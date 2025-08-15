@@ -41,7 +41,7 @@ export const command = {
         await prisma.game.upsert({
           where: { season_week_homeTeam_awayTeam: { season, week, homeTeam: home, awayTeam: away } },
           create: { season, week, homeTeam: home, awayTeam: away, status: 'scheduled' },
-          update: {}, // keep as scheduled if it already exists
+          update: {}, // keep as scheduled if already present
         });
         upserts++;
       }
