@@ -23,8 +23,8 @@ import * as PowerRankings from './commands/powerrankings';
 import * as Settle from './commands/settle';
 import * as Buy from './commands/buy';
 import * as Redeem from './commands/redeem';
-import { command as schedule } from './schedule';
-import { command as scheduleImport } from './scheduleImport';
+import { command as schedule } from './commands/schedule';
+import { command as scheduleImport } from './commands/scheduleImport';
 
 // === Emoji score listener ===
 import { attachScoreListener } from './ingest/score-listener';
