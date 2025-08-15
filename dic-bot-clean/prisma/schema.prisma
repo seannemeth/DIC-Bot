@@ -136,7 +136,13 @@ model Upgrade {
   amount    Int
   season    Int
   week      Int?
+
+  // ← add the relation back to Coach
+  coach     Coach    @relation(fields: [coachId], references: [id], onDelete: Cascade)
+
+  @@index([coachId])
 }
+
 
 model StreamSub {
   id               String   @id @default(cuid())
