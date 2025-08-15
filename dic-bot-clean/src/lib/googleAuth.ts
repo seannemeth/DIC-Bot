@@ -1,86 +1,59 @@
-// src/lib/googleAuth.ts
-// google-spreadsheet v3 (no TS types shipped), so we suppress type errors where needed.
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore
-import { GoogleSpreadsheet } from 'google-spreadsheet';
-
-function clean(s: string) {
-  return s.trim().replace(/^["'`]|["'`]$/g, '');
+// src/lib/googleAuth.ts (replace the readFromBase64() with this)
+function tryParseJSON(s: string) {
+  try { return JSON.parse(s); } catch { return null; }
 }
 
-/** Load service account credentials from env, accepting multiple formats. */
-export function loadCreds(): { client_email: string; private_key: string } {
-  // Preferred: entire service-account JSON encoded as Base64
-  const rawB64 =
-    process.env.GOOGLE_CREDENTIALS_BASE64 ||
-    process.env.GOOGLE_PRIVATE_KEY_BASE64 ||
-    process.env.GOOGLE_PRIVATE_KEY_B64 ||
-    '';
+function b64FixPadding(b64: string) {
+  const mod = b64.length % 4;
+  return mod === 0 ? b64 : b64 + "=".repeat(4 - mod);
+}
 
-  if (rawB64.trim()) {
-    const decoded = Buffer.from(clean(rawB64), 'base64').toString('utf8').trim();
+function decodeBase64Flexible(b64: string): string {
+  // Handle URL-safe base64 and missing padding
+  const urlSafe = b64.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = b64FixPadding(urlSafe);
+  return Buffer.from(padded, "base64").toString("utf8");
+}
 
-    // Try JSON first (recommended)
-    try {
-      const obj = JSON.parse(decoded);
-      const client_email: string =
-        String(obj.client_email || '').trim() ||
-        String(process.env.GOOGLE_CLIENT_EMAIL || process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || '').trim();
-      let private_key: string = String(obj.private_key || '').trim();
-      if (private_key.includes('\\n')) private_key = private_key.replace(/\\n/g, '\n');
-      if (!client_email || !private_key.startsWith('-----BEGIN ')) {
-        throw new Error('Decoded JSON missing client_email/private_key');
-      }
-      return { client_email, private_key };
-    } catch {
-      // Not JSON – maybe it's a PEM
-      const client_email =
-        process.env.GOOGLE_CLIENT_EMAIL || process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || '';
-      const private_key = decoded.includes('\\n') ? decoded.replace(/\\n/g, '\n') : decoded;
-      if (!client_email) throw new Error('PEM provided but GOOGLE_CLIENT_EMAIL is not set.');
-      if (!private_key.startsWith('-----BEGIN ')) {
-        throw new Error('Base64 creds did not decode to JSON or PEM. Recreate the env value.');
-      }
-      return { client_email, private_key };
-    }
+function readFromBase64(): SAJson | null {
+  const raw = process.env.GOOGLE_CREDENTIALS_BASE64;
+  if (!raw) return null;
+
+  // Case A: Some folks paste the raw JSON here (not base64).
+  const rawAsJson = tryParseJSON(raw);
+  if (rawAsJson?.client_email && rawAsJson?.private_key) {
+    return {
+      client_email: String(rawAsJson.client_email),
+      private_key: normalizePrivateKey(String(rawAsJson.private_key)),
+    };
   }
 
-  // Fallback: plain env vars with \n-escaped PEM
-  const rawPem = (process.env.GOOGLE_PRIVATE_KEY || '').trim();
-  const client_email =
-    process.env.GOOGLE_CLIENT_EMAIL || process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || '';
-  if (rawPem && client_email) {
-    const private_key = rawPem.includes('\\n') ? rawPem.replace(/\\n/g, '\n') : rawPem;
-    if (!private_key.startsWith('-----BEGIN ')) {
-      throw new Error('GOOGLE_PRIVATE_KEY is not a PEM');
+  // Case B: Proper (or slightly malformed) base64 → JSON
+  const attempts: Array<{label: string; value: string | null}> = [];
+  try {
+    attempts.push({ label: "single", value: decodeBase64Flexible(raw) });
+  } catch { attempts.push({ label: "single", value: null }); }
+
+  // Case C: Double-encoded base64
+  if (attempts[0]?.value) {
+    try {
+      const d2 = decodeBase64Flexible(attempts[0].value);
+      attempts.push({ label: "double", value: d2 });
+    } catch { /* ignore */ }
+  }
+
+  for (const a of attempts) {
+    if (!a.value) continue;
+    const parsed = tryParseJSON(a.value);
+    if (parsed?.client_email && parsed?.private_key) {
+      return {
+        client_email: String(parsed.client_email),
+        private_key: normalizePrivateKey(String(parsed.private_key)),
+      };
     }
-    return { client_email, private_key };
   }
 
   throw new Error(
-    'No Google credentials found. Set GOOGLE_CREDENTIALS_BASE64 (preferred) or *_PRIVATE_KEY* + client email.'
+    "Base64 creds did not decode to valid service-account JSON (client_email/private_key). Recreate the env value."
   );
-}
-
-/** Open a Google Sheet tab by exact title and return the sheet instance. */
-export async function openSheetByTitle(spreadsheetId: string, sheetTitle: string) {
-  if (!spreadsheetId) throw new Error('Missing GOOGLE_SHEET_ID');
-
-  const { client_email, private_key } = loadCreds();
-
-  const doc = new GoogleSpreadsheet(spreadsheetId);
-  // Explicit v3 auth path
-  // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-  // @ts-ignore
-  await doc.useServiceAccountAuth({ client_email, private_key });
-  await doc.loadInfo();
-
-  const sheet = (doc as any).sheetsByTitle?.[sheetTitle];
-  if (!sheet) {
-    const names = Object.values((doc as any).sheetsByTitle || {})
-      .map((s: any) => s.title)
-      .join(', ');
-    throw new Error(`Tab "${sheetTitle}" not found. Available: ${names || '(none)'}`);
-  }
-  return sheet;
 }
