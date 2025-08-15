@@ -1,3 +1,4 @@
+// src/commands/scoresImport.ts
 import { SlashCommandBuilder, type ChatInputCommandInteraction } from 'discord.js';
 import { google } from 'googleapis';
 import { PrismaClient, GameStatus } from '@prisma/client';
@@ -20,7 +21,7 @@ function norm(s: unknown) {
   return String(s ?? '').trim();
 }
 function keyify(s: string) {
-  return s.toLowerCase().replace(/[^a-z0-9]+/g, ''); // season_week -> "seasonweek"
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, ''); // "Home Score" -> "homescore"
 }
 
 // Accept common header variants → canonical keys
@@ -78,14 +79,12 @@ export const command = {
       const auth = await getGoogleAuthClient();
       const sheets = google.sheets({ version: 'v4', auth });
 
-      // 1) Verify tab exists and list alternatives if not
+      // Verify tab exists and list alternatives if not
       const meta = await sheets.spreadsheets.get({ spreadsheetId: SPREADSHEET_ID });
       const tabs = (meta.data.sheets ?? []).map(s => s.properties?.title).filter(Boolean) as string[];
       const foundTab = tabs.find(t => t?.toLowerCase().trim() === TAB.toLowerCase());
       if (!foundTab) {
-        await interaction.editReply(
-          `❌ Tab **${TAB}** not found. Available tabs:\n• ${tabs.join('\n• ')}`
-        );
+        await interaction.editReply(`❌ Tab **${TAB}** not found. Available tabs:\n• ${tabs.join('\n• ')}`);
         return;
       }
 
@@ -93,12 +92,12 @@ export const command = {
         ? `${SPREADSHEET_ID.slice(0, 4)}…${SPREADSHEET_ID.slice(-4)}`
         : SPREADSHEET_ID;
 
-      // 2) Read a wide range and filter empty rows
+      // Read a wide range and normalize
       const range = `${foundTab}!A:Z`;
       const resp = await sheets.spreadsheets.values.get({ spreadsheetId: SPREADSHEET_ID, range });
       const all = (resp.data.values ?? []).map(row => row.map(norm));
 
-      // Remove leading empty rows
+      // Skip leading empty rows
       let firstDataIdx = 0;
       while (firstDataIdx < all.length && all[firstDataIdx].every(c => !c)) firstDataIdx++;
       if (firstDataIdx >= all.length) {
@@ -106,52 +105,51 @@ export const command = {
         return;
       }
 
+      // Detect header + map positions
+      const headerRow = all[firstDataIdx] as string[];
       const { map, hasAll } = mapHeader(headerRow);
-let dataRows: string[][];
 
-let usedHeader = false;
-if (hasAll) {
-  // everything after header is candidate data
-  dataRows = all.slice(firstDataIdx + 1);
-  usedHeader = true;
-} else {
-  // fallback: positional A..F
-  dataRows = all.slice(firstDataIdx);
-}
+      let dataRows: string[][];
+      let usedHeader = false;
+      if (hasAll) {
+        dataRows = all.slice(firstDataIdx + 1);
+        usedHeader = true;
+      } else {
+        // fallback positional: A..F = Season,Week,HomeTeam,AwayTeam,HomePts,AwayPts
+        dataRows = all.slice(firstDataIdx);
+      }
 
-// Consider a row "data" if any of the mapped (or positional) fields is non-empty
-const rows = dataRows.filter((r) => {
-  if (usedHeader) {
-    const fields = [
-      r[map.season!], r[map.week!],
-      r[map.hometeam!], r[map.awayteam!],
-      r[map.homepts!], r[map.awaypts!],
-    ].map(norm);
-    return fields.some(Boolean);
-  } else {
-    const fields = [r[0], r[1], r[2], r[3], r[4], r[5]].map(norm);
-    return fields.some(Boolean);
-  }
-});
+      // Consider row "data" if any of the mapped (or positional) fields has a value
+      const rows = dataRows.filter((r) => {
+        if (usedHeader) {
+          const fields = [
+            r[map.season!], r[map.week!],
+            r[map.hometeam!], r[map.awayteam!],
+            r[map.homepts!], r[map.awaypts!],
+          ].map(norm);
+          return fields.some(Boolean);
+        } else {
+          const fields = [r[0], r[1], r[2], r[3], r[4], r[5]].map(norm);
+          return fields.some(Boolean);
+        }
+      });
 
-// --- extra diagnostics to help you verify what the bot sees ---
-const headerMapInfo = usedHeader
-  ? `header map idx: season=${map.season}, week=${map.week}, home=${map.hometeam}, away=${map.awayteam}, homePts=${map.homepts}, awayPts=${map.awaypts}`
-  : 'no header detected (positional A..F)';
-const peek = dataRows.slice(0, 5).map((r, i) => `r${i+1}: ${JSON.stringify(r.slice(0, 10))}`).join('\n');
-// --------------------------------------------------------------
+      // Diagnostics
+      const headerMapInfo = usedHeader
+        ? `header map idx: season=${map.season}, week=${map.week}, home=${map.hometeam}, away=${map.awayteam}, homePts=${map.homepts}, awayPts=${map.awaypts}`
+        : 'no header detected (positional A..F)';
+      const peek = dataRows.slice(0, 5).map((r, i) => `r${i+1}: ${JSON.stringify(r.slice(0, 10))}`).join('\n');
 
-if (rows.length === 0) {
-  await interaction.editReply(
-    `Found header but 0 usable data rows in **${foundTab}** @ **${idPrint}**.\n` +
-    `${headerMapInfo}\n` +
-    `Peek:\n${peek || '(empty)'}`
-  );
-  return;
-}
+      if (rows.length === 0) {
+        await interaction.editReply(
+          `Found header but 0 usable data rows in **${foundTab}** @ **${idPrint}**.\n` +
+          `${headerMapInfo}\n` +
+          `Peek:\n${peek || '(empty)'}`
+        );
+        return;
+      }
 
-
-      // 3) Parse rows
+      // Parse and import
       let upserts = 0, skipped = 0, settled = 0, wroteLines = 0;
       const sampleParsed: string[] = [];
 
@@ -165,10 +163,10 @@ if (rows.length === 0) {
         const homePtsRaw  = usedHeader && map.homepts  !== undefined ? r[map.homepts]  : r[4];
         const awayPtsRaw  = usedHeader && map.awaypts  !== undefined ? r[map.awaypts]  : r[5];
 
-        const season = parseInt(seasonRaw, 10);
-        const week   = parseInt(weekRaw, 10);
-        const homeTeam = homeRaw;
-        const awayTeam = awayRaw;
+        const season = parseInt(seasonRaw ?? '', 10);
+        const week   = parseInt(weekRaw ?? '', 10);
+        const homeTeam = norm(homeRaw);
+        const awayTeam = norm(awayRaw);
         const homePts  = Number(homePtsRaw);
         const awayPts  = Number(awayPtsRaw);
 
@@ -228,6 +226,7 @@ if (rows.length === 0) {
       const diag = [
         `Tab: **${foundTab}** @ **${idPrint}**`,
         `Detected header: ${usedHeader ? 'yes' : 'no (positional A..F)'}`,
+        headerMapInfo,
         sampleParsed.length ? `Sample: ${sampleParsed.join(' • ')}` : 'Sample: (none)',
       ].join('\n');
 
