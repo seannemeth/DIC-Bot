@@ -122,9 +122,10 @@ export const command = {
       r.score = r.w * 3 + r.t * 1 + r.diff * 0.01; // wins heavy, point diff light
     }
 
-    // 4) Rank & render
-    const rows = Array.from(teams.values())
-      .sort((a, b) => b.score - a.score || b.diff - a.diff || b.pf - a.pf || a.team.localeCompare(b.team));
+   // 4) Rank & render
+const rows = Array.from(teams.values())
+  .filter(r => r.gp >= 1) // <-- only include teams with at least 1 game
+  .sort((a, b) => b.score - a.score || b.diff - a.diff || b.pf - a.pf || a.team.localeCompare(b.team));
 
     const list = rows.map((r, i) =>
       `**${i + 1}. ${r.team}** — ${r.w}-${r.l}${r.t ? '-' + r.t : ''} (PF ${r.pf} / PA ${r.pa} / Diff ${r.diff})`
