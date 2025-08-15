@@ -1,4 +1,5 @@
-import { PrismaClient, ItemType } from '@prisma/client';
+// src/lib/storeSheet.ts
+import { PrismaClient, Prisma, $Enums } from '@prisma/client';
 import { openSheetByTitle } from './googleAuth';
 const prisma = new PrismaClient();
 
@@ -11,15 +12,22 @@ export async function refreshStoreFromSheet() {
     const key = String(r.ItemId ?? '').trim();
     if (!key) continue;
 
+    const typeStr = String(r.Type ?? 'TOKEN').toUpperCase();
+    // Accept only valid enum values; fallback to TOKEN
+    const valid: Array<$Enums.ItemType> = ['COINS', 'ATTR', 'TOKEN'];
+    const type: $Enums.ItemType = (valid.includes(typeStr as $Enums.ItemType)
+      ? (typeStr as $Enums.ItemType)
+      : 'TOKEN');
+
     const data = {
       itemKey: key,
       name: String(r.Name ?? key),
       description: r.Description ? String(r.Description) : null,
       price: Number(r.Price ?? 0) || 0,
-      type: (String(r.Type ?? 'TOKEN').toUpperCase() as ItemType),
+      type,
       payload: safeJSON(r.PayloadJSON),
       enabled: String(r.Enabled ?? 'TRUE').toUpperCase() !== 'FALSE',
-    };
+    } satisfies Prisma.ItemUncheckedCreateInput;
 
     await prisma.item.upsert({
       where: { itemKey: data.itemKey },
