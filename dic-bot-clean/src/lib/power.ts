@@ -1,45 +1,140 @@
 import { PrismaClient } from '@prisma/client';
+const prisma = new PrismaClient();
 
-export type PowerRow = { coachId:number, team:string, w:number, l:number, t:number, pf:number, pa:number, diff:number, elo:number, composite:number };
+/** Options to tune the formula (no decay used). */
+export type PowerOptions = {
+  winPoints?: number;        // base for a win
+  lossPoints?: number;       // base for a loss
+  tiePoints?: number;        // base for a tie (if you allow)
+  movFactor?: number;        // points per margin of victory
+  movCap?: number;           // cap MOV contribution per game (absolute)
+  oppFactor?: number;        // weight applied to opponent's previous rating
+  iterations?: number;       // how many times to propagate opponent strength
+  season?: number | null;    // filter: season
+  maxWeek?: number | null;   // filter: up to week (inclusive)
+};
 
-function expected(a: number, b: number) { return 1/(1+Math.pow(10,(b-a)/400)); }
+/** Default tuning: balanced between W/L, MOV, and Opp Strength. */
+const DEFAULTS: Required<PowerOptions> = {
+  winPoints: 1.0,
+  lossPoints: -1.0,
+  tiePoints: 0.0,
+  movFactor: 0.05,
+  movCap: 28,
+  oppFactor: 0.20,
+  iterations: 20,
+  season: null,
+  maxWeek: null,
+};
 
-export async function computePower(prisma: PrismaClient): Promise<PowerRow[]> {
-  const coaches = await prisma.coach.findMany();
-  const games = await prisma.game.findMany({ where: { status:"confirmed" }, orderBy: { playedAt:"asc" } });
-  const baseElo = 1500;
-  const elo: Record<number, number> = {}; coaches.forEach((c:any)=>elo[c.id]=baseElo);
+type CoachRow = { id: number; team: string | null; handle: string };
+type GameRow = {
+  id: number;
+  season: number | null;
+  week: number | null;
+  homeCoachId: number;
+  awayCoachId: number;
+  homeTeam: string | null;
+  awayTeam: string | null;
+  homePts: number | null;
+  awayPts: number | null;
+  status: string;
+};
 
-  type Rec = { id:number, team:string, w:number,l:number,t:number,pf:number,pa:number,diff:number };
-  const rec: Record<number, Rec> = {};
-  coaches.forEach((c:any)=> rec[c.id] = { id:c.id, team:c.team || c.handle, w:0,l:0,t:0,pf:0,pa:0,diff:0 });
+export async function fetchInputs(opts?: Partial<PowerOptions>) {
+  const o = { ...DEFAULTS, ...(opts || {}) };
+
+  const [coaches, games] = await Promise.all([
+    prisma.coach.findMany() as unknown as CoachRow[],
+    prisma.game.findMany({
+      where: {
+        status: 'confirmed',
+        ...(o.season != null ? { season: o.season } : {}),
+        ...(o.maxWeek != null ? { week: { lte: o.maxWeek } } : {}),
+      },
+    }) as unknown as GameRow[],
+  ]);
+
+  return { coaches, games, options: o };
+}
+
+/** Compute power ratings. No decay; recursive opponent strength propagation. */
+export function computePowerRatings(
+  coaches: CoachRow[],
+  games: GameRow[],
+  options?: Partial<PowerOptions>
+) {
+  const o = { ...DEFAULTS, ...(options || {}) };
+
+  // Index coaches
+  const idToIdx = new Map<number, number>();
+  const idxToId: number[] = [];
+  const teams = coaches.map((c, i) => {
+    idToIdx.set(c.id, i);
+    idxToId[i] = c.id;
+    return c.team || c.handle;
+  });
+
+  const n = coaches.length;
+  // Initialize ratings
+  let rating = new Array<number>(n).fill(0);
+
+  // Precompute each team's game list for speed
+  type TeamGame = {
+    oppIdx: number;
+    mov: number; // margin of victory from this team's POV
+    base: number; // base win/loss/tie points
+  };
+  const schedule: TeamGame[][] = Array.from({ length: n }, () => []);
 
   for (const g of games) {
-    if (g.homePts==null || g.awayPts==null) continue;
-    const h = g.homeCoachId, a = g.awayCoachId;
-    const homeWin = g.homePts>g.awayPts ? 1 : g.homePts<g.awayPts ? 0 : 0.5;
-    const margin = Math.abs(g.homePts - g.awayPts);
-    const k = Math.min(20 + margin * 0.6, 40);
-    const eh = expected(elo[h], elo[a]);
-    const ea = expected(elo[a], elo[h]);
-    elo[h] = elo[h] + k * ((homeWin as number) - eh);
-    elo[a] = elo[a] + k * ((1 - (homeWin as number)) - ea);
-    const H = rec[h], A = rec[a];
-    H.pf += g.homePts; H.pa += g.awayPts; H.diff += g.homePts - g.awayPts;
-    A.pf += g.awayPts; A.pa += g.homePts; A.diff += g.awayPts - g.homePts;
-    if (g.homePts > g.awayPts) { H.w++; A.l++; }
-    else if (g.homePts < g.awayPts) { A.w++; H.l++; }
-    else { H.t++; A.t++; }
+    if (g.homePts == null || g.awayPts == null) continue;
+    const hi = idToIdx.get(g.homeCoachId);
+    const ai = idToIdx.get(g.awayCoachId);
+    if (hi == null || ai == null) continue;
+
+    const hMov = g.homePts - g.awayPts;
+    const aMov = -hMov;
+
+    const hBase = g.homePts > g.awayPts ? o.winPoints : (g.homePts < g.awayPts ? o.lossPoints : o.tiePoints);
+    const aBase = g.awayPts > g.homePts ? o.winPoints : (g.awayPts < g.homePts ? o.lossPoints : o.tiePoints);
+
+    schedule[hi].push({ oppIdx: ai, mov: hMov, base: hBase });
+    schedule[ai].push({ oppIdx: hi, mov: aMov, base: aBase });
   }
 
-  const rows: PowerRow[] = Object.values(rec).map(r => ({
-    coachId: r.id, team: r.team, w:r.w, l:r.l, t:r.t, pf:r.pf, pa:r.pa, diff:r.diff, elo: elo[r.id] || baseElo, composite: 0
+  // Iteratively propagate opponent strength
+  for (let iter = 0; iter < o.iterations; iter++) {
+    const next = new Array<number>(n).fill(0);
+    for (let i = 0; i < n; i++) {
+      let s = 0;
+      const gamesI = schedule[i];
+      for (const g of gamesI) {
+        const movClamped = Math.max(-o.movCap, Math.min(o.movCap, g.mov));
+        s += g.base + o.movFactor * movClamped + o.oppFactor * rating[g.oppIdx];
+      }
+      // Optionally average by games played to prevent schedule-size advantage
+      next[i] = gamesI.length > 0 ? s / gamesI.length : 0;
+    }
+    // Normalize (zero mean) to prevent drift
+    const mean = next.reduce((a, b) => a + b, 0) / (n || 1);
+    for (let i = 0; i < n; i++) next[i] = next[i] - mean;
+    rating = next;
+  }
+
+  // Create result list
+  const rows = coaches.map((c, i) => ({
+    coachId: c.id,
+    team: c.team || c.handle,
+    rating: rating[i],
   }));
-  const eloVals = rows.map(r=>r.elo);
-  const diffVals = rows.map(r=>r.diff);
-  const n = (vals:number[]) => { const min=Math.min(...vals), max=Math.max(...vals); return vals.map(v => max===min?50: (100*(v-min)/(max-min))); };
-  const eloN = n(eloVals), diffN = n(diffVals);
-  rows.forEach((r,i)=> r.composite = Math.round(0.7*eloN[i] + 0.3*diffN[i]));
-  rows.sort((a,b)=> b.composite - a.composite);
+
+  // Sort desc by rating; tie-break with team name to keep order stable
+  rows.sort((a, b) => (b.rating - a.rating) || a.team.localeCompare(b.team));
   return rows;
+}
+
+export async function computePowerRankings(opts?: Partial<PowerOptions>) {
+  const { coaches, games, options } = await fetchInputs(opts);
+  return computePowerRatings(coaches, games, options);
 }
