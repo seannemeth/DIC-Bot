@@ -16,16 +16,50 @@ const SPREADSHEET_ID =
 
 const TAB = (process.env.SCORES_TAB_NAME || 'Scores').trim();
 
-/**
- * Expected columns (header row optional; importer will detect/skip it):
- * A: Season
- * B: Week
- * C: HomeTeam
- * D: AwayTeam
- * E: HomePts
- * F: AwayPts
- * (Optional) G: Status   // ignored; we auto-confirm on import
- */
+function norm(s: unknown) {
+  return String(s ?? '').trim();
+}
+function keyify(s: string) {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, ''); // season_week -> "seasonweek"
+}
+
+// Accept common header variants → canonical keys
+const headerAliases: Record<string, 'season'|'week'|'hometeam'|'awayteam'|'homepts'|'awaypts'> = {
+  season: 'season',
+  yr: 'season',
+  week: 'week',
+  wk: 'week',
+  hometeam: 'hometeam',
+  home: 'hometeam',
+  hom: 'hometeam',
+  awayteam: 'awayteam',
+  away: 'awayteam',
+  awy: 'awayteam',
+  homepts: 'homepts',
+  homepoints: 'homepts',
+  home_score: 'homepts',
+  homescore: 'homepts',
+  h: 'homepts',
+  awaypts: 'awaypts',
+  awaypoints: 'awaypts',
+  awayscore: 'awaypts',
+  away_score: 'awaypts',
+  a: 'awaypts',
+};
+
+function mapHeader(headerRow: string[]) {
+  const map: Record<'season'|'week'|'hometeam'|'awayteam'|'homepts'|'awaypts', number | undefined> = {
+    season: undefined, week: undefined, hometeam: undefined, awayteam: undefined, homepts: undefined, awaypts: undefined
+  };
+  headerRow.forEach((h, idx) => {
+    const k = keyify(h);
+    const aliased = headerAliases[k as keyof typeof headerAliases];
+    if (aliased && map[aliased] === undefined) map[aliased] = idx;
+  });
+  const hasAll = Object.values(map).every(v => typeof v === 'number');
+  return { map, hasAll };
+}
+
 export const command = {
   data: new SlashCommandBuilder()
     .setName('scores_import')
@@ -33,71 +67,107 @@ export const command = {
   async execute(interaction: ChatInputCommandInteraction) {
     await interaction.deferReply({ ephemeral: true });
 
+    if (!SPREADSHEET_ID) {
+      await interaction.editReply(
+        '❌ Missing spreadsheet id. Set `GOOGLE_SHEETS_SPREADSHEET_ID` (or `GOOGLE_SHEET_ID`) in Railway.'
+      );
+      return;
+    }
+
     try {
-      if (!SPREADSHEET_ID) {
+      const auth = await getGoogleAuthClient();
+      const sheets = google.sheets({ version: 'v4', auth });
+
+      // 1) Verify tab exists and list alternatives if not
+      const meta = await sheets.spreadsheets.get({ spreadsheetId: SPREADSHEET_ID });
+      const tabs = (meta.data.sheets ?? []).map(s => s.properties?.title).filter(Boolean) as string[];
+      const foundTab = tabs.find(t => t?.toLowerCase().trim() === TAB.toLowerCase());
+      if (!foundTab) {
         await interaction.editReply(
-          '❌ Missing spreadsheet id. Set `GOOGLE_SHEETS_SPREADSHEET_ID` (or `GOOGLE_SHEET_ID`) in Railway.'
+          `❌ Tab **${TAB}** not found. Available tabs:\n• ${tabs.join('\n• ')}`
         );
         return;
       }
 
-      const auth = await getGoogleAuthClient();
-      const sheets = google.sheets({ version: 'v4', auth });
+      const idPrint = SPREADSHEET_ID.length > 8
+        ? `${SPREADSHEET_ID.slice(0, 4)}…${SPREADSHEET_ID.slice(-4)}`
+        : SPREADSHEET_ID;
 
-      const range = `${TAB}!A:G`;
-      const resp = await sheets.spreadsheets.values.get({
-        spreadsheetId: SPREADSHEET_ID,
-        range,
-      });
+      // 2) Read a wide range and filter empty rows
+      const range = `${foundTab}!A:Z`;
+      const resp = await sheets.spreadsheets.values.get({ spreadsheetId: SPREADSHEET_ID, range });
+      const all = (resp.data.values ?? []).map(row => row.map(norm));
 
-      const rows = resp.data.values ?? [];
-      if (!rows.length) {
-        await interaction.editReply(`No rows found in **${TAB}**.`);
+      // Remove leading empty rows
+      let firstDataIdx = 0;
+      while (firstDataIdx < all.length && all[firstDataIdx].every(c => !c)) firstDataIdx++;
+      if (firstDataIdx >= all.length) {
+        await interaction.editReply(`No rows found in **${foundTab}** @ **${idPrint}** (A:Z all empty).`);
         return;
       }
 
-      const [header] = rows;
-      const looksLikeHeader =
-        Array.isArray(header) &&
-        header.some((cell) => String(cell ?? '').toLowerCase().includes('season'));
-      const data = rows.slice(looksLikeHeader ? 1 : 0);
+      const headerRow = all[firstDataIdx];
+      const { map, hasAll } = mapHeader(headerRow);
+      let dataRows: string[][];
 
+      let usedHeader = false;
+      if (hasAll) {
+        dataRows = all.slice(firstDataIdx + 1);
+        usedHeader = true;
+      } else {
+        // Fallback: assume positional A..F = Season,Week,HomeTeam,AwayTeam,HomePts,AwayPts
+        dataRows = all.slice(firstDataIdx);
+      }
+
+      // Filter out completely blank rows
+      const rows = dataRows.filter(r => r.some(c => c));
+
+      if (rows.length === 0) {
+        await interaction.editReply(`Found header but 0 data rows in **${foundTab}** @ **${idPrint}**.`);
+        return;
+      }
+
+      // 3) Parse rows
       let upserts = 0, skipped = 0, settled = 0, wroteLines = 0;
+      const sampleParsed: string[] = [];
 
-      for (const r of data) {
-        const [
-          seasonRaw, weekRaw,
-          homeRaw, awayRaw,
-          homePtsRaw, awayPtsRaw,
-        ] = (r ?? []).map((c: unknown) => (c ?? '').toString().trim());
+      for (let i = 0; i < rows.length; i++) {
+        const r = rows[i];
 
-        if (!seasonRaw || !weekRaw || !homeRaw || !awayRaw || !homePtsRaw || !awayPtsRaw) {
+        const seasonRaw   = usedHeader && map.season   !== undefined ? r[map.season]   : r[0];
+        const weekRaw     = usedHeader && map.week     !== undefined ? r[map.week]     : r[1];
+        const homeRaw     = usedHeader && map.hometeam !== undefined ? r[map.hometeam] : r[2];
+        const awayRaw     = usedHeader && map.awayteam !== undefined ? r[map.awayteam] : r[3];
+        const homePtsRaw  = usedHeader && map.homepts  !== undefined ? r[map.homepts]  : r[4];
+        const awayPtsRaw  = usedHeader && map.awaypts  !== undefined ? r[map.awaypts]  : r[5];
+
+        const season = parseInt(seasonRaw, 10);
+        const week   = parseInt(weekRaw, 10);
+        const homeTeam = homeRaw;
+        const awayTeam = awayRaw;
+        const homePts  = Number(homePtsRaw);
+        const awayPts  = Number(awayPtsRaw);
+
+        if (
+          !seasonRaw || !weekRaw || !homeTeam || !awayTeam ||
+          Number.isNaN(season) || Number.isNaN(week) ||
+          !Number.isFinite(homePts) || !Number.isFinite(awayPts)
+        ) {
           skipped++; continue;
         }
 
-        const season = parseInt(seasonRaw, 10);
-        const week = parseInt(weekRaw, 10);
-        const homeTeam = homeRaw;
-        const awayTeam = awayRaw;
-        const homePts = Number(homePtsRaw);
-        const awayPts = Number(awayPtsRaw);
+        if (sampleParsed.length < 5) {
+          sampleParsed.push(`S${season} W${week} ${homeTeam} ${homePts}-${awayPts} ${awayTeam}`);
+        }
 
-        if (
-          Number.isNaN(season) || Number.isNaN(week) ||
-          !Number.isFinite(homePts) || !Number.isFinite(awayPts)
-        ) { skipped++; continue; }
-
-        // Optional: link coaches if present
         const [homeCoach, awayCoach] = await Promise.all([
           prisma.coach.findFirst({ where: { team: { equals: homeTeam, mode: 'insensitive' } } }),
           prisma.coach.findFirst({ where: { team: { equals: awayTeam, mode: 'insensitive' } } }),
         ]);
 
-        // Upsert Game and AUTO-CONFIRM
+        // Upsert game + auto-confirm
         const game = await prisma.game.upsert({
-          where: {
-            season_week_homeTeam_awayTeam: { season, week, homeTeam, awayTeam },
-          },
+          where: { season_week_homeTeam_awayTeam: { season, week, homeTeam, awayTeam } },
           create: {
             season, week, homeTeam, awayTeam,
             homePts, awayPts,
@@ -114,7 +184,7 @@ export const command = {
         });
         upserts++;
 
-        // Write back to Lines sheet
+        // Write back to Lines
         try {
           await upsertLinesScore({ season, week, homeTeam, awayTeam, homePts, awayPts });
           wroteLines++;
@@ -122,7 +192,7 @@ export const command = {
           console.error('[Lines writeback] failed:', e);
         }
 
-        // Settle wagers for this game
+        // Settle
         try {
           await settleWagersForGame(game.id);
           settled++;
@@ -131,8 +201,14 @@ export const command = {
         }
       }
 
+      const diag = [
+        `Tab: **${foundTab}** @ **${idPrint}**`,
+        `Detected header: ${usedHeader ? 'yes' : 'no (positional A..F)'}`,
+        sampleParsed.length ? `Sample: ${sampleParsed.join(' • ')}` : 'Sample: (none)',
+      ].join('\n');
+
       await interaction.editReply(
-        `✅ Scores import from **${TAB}**: ${upserts} upserts, ${settled} settled, ${wroteLines} lines-updated (skipped ${skipped}/${data.length}).`
+        `✅ Scores import: ${upserts} upserts, ${settled} settled, ${wroteLines} lines-updated (skipped ${skipped}/${rows.length}).\n${diag}`
       );
     } catch (e: any) {
       console.error('[scores_import] failed:', e);
