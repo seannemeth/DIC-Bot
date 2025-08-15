@@ -24,23 +24,32 @@ export const command = {
     )
     .addIntegerOption(o =>
       o.setName('their_score').setDescription("Opponent's points").setRequired(true),
+    )
+    .addIntegerOption(o =>
+      o
+        .setName('season')
+        .setDescription('Season number (default 1)')
+        .setRequired(false),
+    )
+    .addIntegerOption(o =>
+      o
+        .setName('week')
+        .setDescription('Week number (default 1)')
+        .setRequired(false),
     ),
+
   async execute(interaction: ChatInputCommandInteraction) {
     const reporterId = interaction.user.id;
     const oppUser = interaction.options.getUser('opponent', true);
     const yourScore = interaction.options.getInteger('your_score', true);
     const theirScore = interaction.options.getInteger('their_score', true);
-
-    // Figure out which side is home/away based on who reports (customize if you prefer fixed home/away)
-    const homeCoachDiscordId = reporterId;
-    const awayCoachDiscordId = oppUser.id;
-    const homePts = yourScore;
-    const awayPts = theirScore;
+    const season = interaction.options.getInteger('season') ?? 1;
+    const week = interaction.options.getInteger('week') ?? 1;
 
     // Resolve Coach rows (assumes Coach.discordId is unique)
     const [homeCoach, awayCoach] = await Promise.all([
-      prisma.coach.findUnique({ where: { discordId: homeCoachDiscordId } }),
-      prisma.coach.findUnique({ where: { discordId: awayCoachDiscordId } }),
+      prisma.coach.findUnique({ where: { discordId: reporterId } }),
+      prisma.coach.findUnique({ where: { discordId: oppUser.id } }),
     ]);
 
     if (!homeCoach || !awayCoach) {
@@ -52,28 +61,22 @@ export const command = {
       return;
     }
 
-    // Create a pending game row (or reuse an existing pending one between same coaches)
-    const game = await prisma.game.create({
-      data: {
-        homeCoachId: homeCoach.id,
-        awayCoachId: awayCoach.id,
-        homePts,
-        awayPts,
-        status: 'pending', // you have 'confirmed' elsewhere
-      },
-    });
+    const homeTeam = homeCoach.team ?? homeCoach.handle;
+    const awayTeam = awayCoach.team ?? awayCoach.handle;
+    const homePts = yourScore;
+    const awayPts = theirScore;
 
-    const confirmId = `postscore_confirm_${game.id}`;
-    const cancelId = `postscore_cancel_${game.id}`;
+    // Build buttons before replying
+    // We'll defer update in the button handler to avoid "This interaction failed"
+    const confirmId = `postscore_confirm_${Date.now()}_${reporterId}_${oppUser.id}`;
+    const cancelId = `postscore_cancel_${Date.now()}_${reporterId}_${oppUser.id}`;
 
     const embed = new EmbedBuilder()
       .setTitle('📝 Score Submission (Pending Confirmation)')
       .setDescription(
-        `**${homeCoach.team ?? homeCoach.handle}** ${homePts} — ${awayPts} **${
-          awayCoach.team ?? awayCoach.handle
-        }**\n\n` +
+        `**${homeTeam}** ${homePts} — ${awayPts} **${awayTeam}**\n\n` +
           `Submitted by: <@${reporterId}> • Opponent: <@${oppUser.id}>\n` +
-          `Game ID: \`${game.id}\``,
+          `Season ${season}, Week ${week}`,
       )
       .setColor(0x3498db);
 
@@ -88,14 +91,14 @@ export const command = {
         .setStyle(ButtonStyle.Danger),
     );
 
-    // Reply immediately and fetch the message for a collector
+    // Reply immediately (ack slash command)
     const msg = await interaction.reply({
       embeds: [embed],
       components: [row],
       fetchReply: true,
     });
 
-    // Collector: only allow the two coaches to press; 60s timeout
+    // Collector: only the two coaches can press; 60s timeout
     const filter = (i: ButtonInteraction) =>
       (i.customId === confirmId || i.customId === cancelId) &&
       (i.user.id === reporterId || i.user.id === oppUser.id);
@@ -107,15 +110,11 @@ export const command = {
     });
 
     collector.on('collect', async (btn: ButtonInteraction) => {
-      try {
-        // ACKNOWLEDGE FIRST to avoid "This interaction failed"
-        await btn.deferUpdate();
+      // Acknowledge button press right away
+      await btn.deferUpdate();
 
+      try {
         if (btn.customId === cancelId) {
-          await prisma.game.update({
-            where: { id: game.id },
-            data: { status: 'cancelled' as any },
-          });
           const cancelled = EmbedBuilder.from(embed)
             .setTitle('❌ Score Submission Cancelled')
             .setColor(0xe74c3c);
@@ -124,39 +123,47 @@ export const command = {
           return;
         }
 
-        // Confirm path
-        await prisma.game.update({
-          where: { id: game.id },
-          data: { status: 'confirmed' as any },
+        // Confirm path: create the Game row with required fields for your schema
+        const game = await prisma.game.create({
+          data: {
+            season,
+            week,
+            homeCoachId: homeCoach.id,
+            awayCoachId: awayCoach.id,
+            homeTeam,
+            awayTeam,
+            homePts,
+            awayPts,
+            status: 'confirmed' as any, // adjust if your enum differs
+          },
         });
 
         // Optional: award coins to winner (comment out if not desired)
-        let winnerId = homeCoach.id;
-        let loserId = awayCoach.id;
-        if (awayPts > homePts) {
-          winnerId = awayCoach.id;
-          loserId = homeCoach.id;
-        }
         if (homePts !== awayPts) {
+          const winnerId = awayPts > homePts ? awayCoach.id : homeCoach.id;
+          const loserId = awayPts > homePts ? homeCoach.id : awayCoach.id;
+
           await prisma.wallet.upsert({
             where: { coachId: winnerId },
             create: { coachId: winnerId, balance: 500 },
-            update: { balance: { increment: 500 } }, // tweak value
+            update: { balance: { increment: 500 } },
           });
           await prisma.wallet.upsert({
             where: { coachId: loserId },
             create: { coachId: loserId, balance: 0 },
-            update: {}, // no change for loss
+            update: {},
           });
         }
 
         const confirmed = EmbedBuilder.from(embed)
           .setTitle('✅ Score Confirmed')
+          .setFooter({ text: `Game saved (ID ${game.id})` })
           .setColor(0x2ecc71);
+
         await (msg as any).edit({ embeds: [confirmed], components: [] });
         collector.stop('confirmed');
       } catch (err) {
-        console.error('[postscore] button error:', err);
+        console.error('[postscore] confirm error:', err);
         await (msg as any).edit({
           content: '⚠️ Something went wrong finalizing this score. Try again.',
           components: [],
@@ -165,7 +172,7 @@ export const command = {
       }
     });
 
-    collector.on('end', async (_collected, reason) => {
+    collector.on('end', async (_collected: any, reason: string) => {
       if (reason === 'time') {
         const expired = EmbedBuilder.from(embed)
           .setTitle('⌛ Confirmation Timed Out')
