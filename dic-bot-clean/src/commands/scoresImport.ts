@@ -1,7 +1,7 @@
 // src/commands/scoresImport.ts
 import { SlashCommandBuilder, type ChatInputCommandInteraction } from 'discord.js';
 import { google } from 'googleapis';
-import { PrismaClient, GameStatus } from '@prisma/client';
+import { PrismaClient } from '@prisma/client';
 import { getGoogleAuthClient } from '../lib/googleAuth';
 import { settleWagersForGame } from '../lib/settle';
 import { upsertLinesScore } from '../lib/linesWriteback';
@@ -193,13 +193,13 @@ export const command = {
           create: {
             season, week, homeTeam, awayTeam,
             homePts, awayPts,
-            status: GameStatus.confirmed,
+            status: 'confirmed' as any,
             homeCoachId: homeCoach?.id,
             awayCoachId: awayCoach?.id,
           },
           update: {
             homePts, awayPts,
-            status: GameStatus.confirmed,
+            status: 'confirmed' as any,
             homeCoachId: homeCoach?.id ?? undefined,
             awayCoachId: awayCoach?.id ?? undefined,
           },
