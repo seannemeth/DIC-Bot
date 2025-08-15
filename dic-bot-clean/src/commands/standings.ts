@@ -1,11 +1,11 @@
 // src/commands/standings.ts
-import { SlashCommandBuilder, EmbedBuilder } from 'discord.js';
-import { PrismaClient, GameStatus } from '@prisma/client';
+import { SlashCommandBuilder, EmbedBuilder, type ChatInputCommandInteraction } from 'discord.js';
+import { PrismaClient } from '@prisma/client';
+import { getCurrentSeasonWeek } from '../lib/meta';
 
 const prisma = new PrismaClient();
 
-type Rec = {
-  id: string;
+type TeamRow = {
   team: string;
   w: number;
   l: number;
@@ -15,79 +15,92 @@ type Rec = {
   diff: number;
 };
 
+function pct(r: TeamRow) {
+  const g = r.w + r.l + r.t;
+  return g ? (r.w + 0.5 * r.t) / g : 0;
+}
+
 export const command = {
   data: new SlashCommandBuilder()
     .setName('standings')
-    .setDescription('Show overall standings'),
-  async execute(interaction: any) {
-    // pull coaches and only confirmed games
-    const teams = await prisma.coach.findMany();
-    const games = await prisma.game.findMany({ where: { status: GameStatus.confirmed } });
+    .setDescription('Show standings based on recorded scores')
+    .addIntegerOption(o =>
+      o.setName('season').setDescription('Season to show (defaults to current)')
+    ),
+  async execute(interaction: ChatInputCommandInteraction) {
+    // season filter (default: current season)
+    const seasonOpt = interaction.options.getInteger('season', false) ?? null;
+    const season = seasonOpt ?? (await getCurrentSeasonWeek()).season;
 
-    // seed table
-    const table: Rec[] = teams.map((t: any) => ({
-      id: t.id as string,
-      team: (t.team ?? '').toString(),
-      w: 0,
-      l: 0,
-      t: 0,
-      pf: 0,
-      pa: 0,
-      diff: 0,
-    }));
+    // Pull all games with scores for the season
+    const games = await prisma.game.findMany({
+      where: { season, AND: [{ homePts: { not: null } }, { awayPts: { not: null } }] },
+      orderBy: [{ week: 'asc' }, { homeTeam: 'asc' }, { awayTeam: 'asc' }],
+    });
 
-    // quick lookup by coach id (string)
-    const lookup = new Map<string, Rec>(table.map((r) => [r.id, r]));
-
-    // aggregate results
-    for (const g of games) {
-      if (g.homePts == null || g.awayPts == null) continue;
-
-      const h = g.homeCoachId ? lookup.get(g.homeCoachId) : undefined;
-      const a = g.awayCoachId ? lookup.get(g.awayCoachId) : undefined;
-      if (!h || !a) continue; // skip if a coach isn't linked
-
-      h.pf += g.homePts;
-      h.pa += g.awayPts;
-      h.diff += g.homePts - g.awayPts;
-
-      a.pf += g.awayPts;
-      a.pa += g.homePts;
-      a.diff += g.awayPts - g.homePts;
-
-      if (g.homePts > g.awayPts) {
-        h.w++;
-        a.l++;
-      } else if (g.homePts < g.awayPts) {
-        a.w++;
-        h.l++;
-      } else {
-        h.t++;
-        a.t++;
-      }
+    if (games.length === 0) {
+      await interaction.reply({
+        embeds: [
+          new EmbedBuilder()
+            .setTitle(`Season ${season} — Standings`)
+            .setDescription('No scored games found yet.')
+            .setColor(0x95a5a6),
+        ],
+        ephemeral: false,
+      });
+      return;
     }
 
-    // sort: win% desc, then diff desc, then PF-PA desc
-    const sorted = table.sort((x, y) => {
-      const wx = x.w + x.l + x.t ? (x.w + 0.5 * x.t) / (x.w + x.l + x.t) : 0;
-      const wy = y.w + y.l + y.t ? (y.w + 0.5 * y.t) / (y.w + y.l + y.t) : 0;
-      if (wy !== wx) return wy - wx;
+    // Build the universe of teams from games (no reliance on coach links)
+    const teams = new Set<string>();
+    for (const g of games) {
+      teams.add(g.homeTeam.trim());
+      teams.add(g.awayTeam.trim());
+    }
+
+    // Initialize table keyed by team name
+    const table = new Map<string, TeamRow>();
+    for (const t of teams) {
+      table.set(t, { team: t, w: 0, l: 0, t: 0, pf: 0, pa: 0, diff: 0 });
+    }
+
+    // Aggregate results
+    for (const g of games) {
+      const home = table.get(g.homeTeam.trim())!;
+      const away = table.get(g.awayTeam.trim())!;
+      const h = Number(g.homePts);
+      const a = Number(g.awayPts);
+
+      home.pf += h; home.pa += a; home.diff += (h - a);
+      away.pf += a; away.pa += h; away.diff += (a - h);
+
+      if (h > a) { home.w++; away.l++; }
+      else if (h < a) { away.w++; home.l++; }
+      else { home.t++; away.t++; }
+    }
+
+    // Sort by win%, then point diff, then PF
+    const rows = Array.from(table.values()).sort((x, y) => {
+      const px = pct(x), py = pct(y);
+      if (py !== px) return py - px;
       if (y.diff !== x.diff) return y.diff - x.diff;
       return (y.pf - y.pa) - (x.pf - x.pa);
     });
 
-    const lines = sorted.map(
-      (r, i) =>
-        `**${i + 1}. ${r.team}**  ${r.w}-${r.l}${r.t ? '-' + r.t : ''}  (PF ${r.pf} / PA ${r.pa} / Diff ${r.diff})`,
-    );
+    const lines = rows.map((r, i) => {
+      const gamesPlayed = r.w + r.l + r.t;
+      const pctDisp = gamesPlayed ? pct(r).toFixed(3).replace(/^0/, '') : '-';
+      return `**${i + 1}. ${r.team}**  ${r.w}-${r.l}${r.t ? '-' + r.t : ''}  (PF ${r.pf} / PA ${r.pa} / Diff ${r.diff})  •  ${pctDisp}`;
+    });
 
     await interaction.reply({
       embeds: [
         new EmbedBuilder()
-          .setTitle('DIC Standings')
-          .setDescription(lines.join('\n') || 'No data')
+          .setTitle(`Season ${season} — Standings`)
+          .setDescription(lines.join('\n'))
           .setColor(0x3498db),
       ],
+      ephemeral: false,
     });
   },
 } as const;
