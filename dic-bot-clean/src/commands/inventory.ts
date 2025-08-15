@@ -15,17 +15,20 @@ export const command = {
     const rows = await prisma.purchase.findMany({
       where: { coachId: coach.id },
       include: { item: true },
-      orderBy: { createdAt: 'desc' },
+      orderBy: { purchasedAt: 'desc' },
     });
 
     if (!rows.length) return interaction.editReply('Your inventory is empty.');
 
     const lines = rows.map((r: any) => {
-      const left = r.qty - r.consumed;
-      return `**${r.item.itemKey}** — ${r.item.name} • ${left}/${r.qty} left`;
+      return `**${r.item.itemKey}** — ${r.item.name}`;
     });
 
-    const embed = new EmbedBuilder().setTitle('Your Inventory').setDescription(lines.join('\n')).setColor(0x9b59b6);
+    const embed = new EmbedBuilder()
+      .setTitle('Your Inventory')
+      .setDescription(lines.join('\n'))
+      .setColor(0x9b59b6);
+
     return interaction.editReply({ embeds: [embed] });
   }
 } as const;
