@@ -1,4 +1,3 @@
-// src/commands/lines.ts
 import {
   SlashCommandBuilder,
   EmbedBuilder,
@@ -13,8 +12,10 @@ export const command = {
 
   async execute(interaction: ChatInputCommandInteraction) {
     await interaction.deferReply();
+
+    const sheetId = process.env.GOOGLE_SHEET_ID || '';
     try {
-      const sheet = await openSheetByTitle('Lines');
+      const sheet = await openSheetByTitle(sheetId, 'Lines');
 
       // Expected headers: Season | Week | HomeTeam | AwayTeam | Spread | Total | HomeML | AwayML | Cutoff
       const rows: any[] = await sheet.getRows({ limit: 25 });
