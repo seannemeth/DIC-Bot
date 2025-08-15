@@ -1,3 +1,4 @@
+// src/lib/googleAuth.ts
 import { google, sheets_v4 } from 'googleapis';
 
 function decodeBase64Json(b64: string) {
@@ -46,8 +47,8 @@ export async function getSheetsClient(): Promise<sheets_v4.Sheets> {
 }
 
 /**
- * Legacy helper used across your codebase.
- * Returns: { sheets, spreadsheetId, sheetId, title }
+ * Legacy helper: open a tab by title and expose convenience methods.
+ * Returns: { sheets, spreadsheetId, sheetId, title, getRows(), addRow(values) }
  */
 export async function openSheetByTitle(spreadsheetId: string, title: string) {
   const sheets = await getSheetsClient();
@@ -60,10 +61,23 @@ export async function openSheetByTitle(spreadsheetId: string, title: string) {
     throw new Error(`Sheet "${title}" not found. Available tabs: ${titles.join(', ')}`);
   }
 
-  return {
-    sheets,
-    spreadsheetId,
-    sheetId: sheet.properties.sheetId,
-    title,
-  };
+  const sheetId = sheet.properties.sheetId;
+
+  async function getRows(rangeA1?: string): Promise<string[][]> {
+    const range = rangeA1 ?? `${title}!A:Z`;
+    const resp = await sheets.spreadsheets.values.get({ spreadsheetId, range });
+    return resp.data.values ?? [];
+  }
+
+  async function addRow(values: (string | number | null)[]) {
+    await sheets.spreadsheets.values.append({
+      spreadsheetId,
+      range: `${title}!A:Z`,
+      valueInputOption: 'USER_ENTERED',
+      insertDataOption: 'INSERT_ROWS',
+      requestBody: { values: [values] },
+    });
+  }
+
+  return { sheets, spreadsheetId, sheetId, title, getRows, addRow };
 }
