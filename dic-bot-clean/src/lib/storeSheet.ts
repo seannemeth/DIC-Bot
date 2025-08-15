@@ -130,3 +130,4 @@ export async function syncStoreFromSheet(): Promise<StoreSyncResult> {
     diag: `Tab: ${foundTab} • Parsed samples: ${samples.join(' | ') || '(none)'}`
   };
 }
+export { syncStoreFromSheet as refreshStoreFromSheet };
