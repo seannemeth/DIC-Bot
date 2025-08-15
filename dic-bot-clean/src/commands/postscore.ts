@@ -2,7 +2,7 @@
 import { SlashCommandBuilder, type ChatInputCommandInteraction, EmbedBuilder } from 'discord.js';
 import { PrismaClient } from '@prisma/client';
 import { settleWagersForGame } from '../lib/settle';
-import { upsertLinesScore } from '../lib/linesWriteback'; // ✅ add this
+import { upsertLinesScore } from '../lib/linesWriteback';
 
 const prisma = new PrismaClient();
 
@@ -33,15 +33,21 @@ export const command = {
       return;
     }
 
-    // DB: save the game
-    const created = await prisma.game.create({
-      data: {
-        season, week,
+    // Upsert the scheduled game row -> confirmed with scores
+    const game = await prisma.game.upsert({
+      where: { game_unique: { season, week, homeTeam, awayTeam } },
+      create: {
+        season, week, homeTeam, awayTeam,
+        homePts, awayPts,
+        status: 'confirmed',
         homeCoachId: homeCoach.id,
         awayCoachId: awayCoach.id,
-        homeTeam, awayTeam,
+      },
+      update: {
         homePts, awayPts,
-        status: 'confirmed' as any,
+        status: 'confirmed',
+        homeCoachId: homeCoach.id,
+        awayCoachId: awayCoach.id,
       },
     });
 
@@ -51,8 +57,6 @@ export const command = {
       console.log(`[Lines writeback] ${res.action} row for S${season} W${week} ${homeTeam} vs ${awayTeam}`);
     } catch (e) {
       console.error('[Lines writeback] failed:', e);
-      // optional: tell the user non-fatal warning
-      // await interaction.followUp({ content: '⚠️ Wrote score to DB, but failed to update Lines sheet.', ephemeral: true });
     }
 
     // Respond
@@ -64,7 +68,7 @@ export const command = {
 
     // Auto-settle bets
     try {
-      await settleWagersForGame(created.id);
+      await settleWagersForGame(game.id);
     } catch (e) {
       console.error('[settle] failed:', e);
     }
