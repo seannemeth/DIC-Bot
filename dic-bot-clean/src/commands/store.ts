@@ -1,38 +1,63 @@
-import { SlashCommandBuilder, EmbedBuilder, type ChatInputCommandInteraction } from 'discord.js';
+import { SlashCommandBuilder, type ChatInputCommandInteraction } from 'discord.js';
 import { PrismaClient } from '@prisma/client';
-import { refreshStoreFromSheet } from '../lib/storeSheet';
 const prisma = new PrismaClient();
 
 export const command = {
   data: new SlashCommandBuilder()
     .setName('store')
-    .setDescription('Browse or manage the DIC store')
-    .addSubcommand(sc => sc.setName('list').setDescription('Show available items'))
-    .addSubcommand(sc => sc.setName('refresh').setDescription('Admin: refresh items from Google Sheet')),
+    .setDescription('View or buy store items')
+    .addSubcommand(sc =>
+      sc.setName('list')
+        .setDescription('List store items'))
+    .addSubcommand(sc =>
+      sc.setName('buy')
+        .setDescription('Buy a store item')
+        .addStringOption(o => o.setName('item').setDescription('Item key').setRequired(true))
+        .addStringOption(o => o.setName('note').setDescription('Optional note'))),
   async execute(interaction: ChatInputCommandInteraction) {
     const sub = interaction.options.getSubcommand();
-    if (sub === 'refresh') {
-      // simple admin check
-      // @ts-ignore
-      if (!interaction.memberPermissions?.has('Administrator')) {
-        return interaction.reply({ content: 'Admin only.', ephemeral: true });
-      }
-      await interaction.deferReply({ ephemeral: true });
-      await refreshStoreFromSheet();
-      const count = await prisma.item.count();
-      return interaction.editReply(`✅ Store synced. Items in DB: **${count}**.`);
+
+    if (sub === 'list') {
+      const items = await prisma.item.findMany({ where: { enabled: true }, orderBy: { price: 'asc' } });
+      if (!items.length) return interaction.reply({ content: 'No store items available.', ephemeral: true });
+
+      const lines = items.map((i: any) =>
+        `**${i.itemKey}** — ${i.name} • ${i.price} DIC$\n${i.description ?? ''}`.trim()
+      );
+
+      return interaction.reply({ content: lines.join('\n\n'), ephemeral: true });
     }
 
-    // list
-    await interaction.deferReply({ ephemeral: true });
-    const items = await prisma.item.findMany({ where: { enabled: true }, orderBy: { price: 'asc' } });
-    if (!items.length) return interaction.editReply('No items are enabled in the store.');
+    if (sub === 'buy') {
+      const coach = await prisma.coach.findUnique({ where: { discordId: interaction.user.id } });
+      if (!coach) return interaction.reply({ content: '❌ You must set up first with `/setteam`.', ephemeral: true });
 
-    const lines = items.map(i => `**${i.itemKey}** — ${i.name} • ${i.price} DIC$\n${i.description ?? ''}`.trim());
-    const embed = new EmbedBuilder()
-      .setTitle('DIC Store')
-      .setDescription(lines.join('\n\n'))
-      .setColor(0xf1c40f);
-    return interaction.editReply({ embeds: [embed] });
+      const itemKey = interaction.options.getString('item', true);
+      const note = interaction.options.getString('note') || null;
+
+      const item = await prisma.item.findUnique({ where: { itemKey } });
+      if (!item) return interaction.reply({ content: '❌ Item not found.', ephemeral: true });
+
+      const wallet = await prisma.wallet.findUnique({ where: { coachId: coach.id } });
+      if (!wallet || wallet.balance < item.price) {
+        return interaction.reply({ content: '❌ Not enough DIC$.', ephemeral: true });
+      }
+
+      await prisma.wallet.update({
+        where: { coachId: coach.id },
+        data: { balance: { decrement: item.price } },
+      });
+
+      await prisma.purchase.create({
+        data: {
+          coachId: coach.id,
+          itemId: item.itemKey,
+          price: item.price,
+          note,
+        },
+      });
+
+      return interaction.reply({ content: `✅ Bought **${item.name}** for ${item.price} DIC$.`, ephemeral: true });
+    }
   }
 } as const;
