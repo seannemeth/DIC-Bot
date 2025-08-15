@@ -106,26 +106,50 @@ export const command = {
         return;
       }
 
-      const headerRow = all[firstDataIdx];
       const { map, hasAll } = mapHeader(headerRow);
-      let dataRows: string[][];
+let dataRows: string[][];
 
-      let usedHeader = false;
-      if (hasAll) {
-        dataRows = all.slice(firstDataIdx + 1);
-        usedHeader = true;
-      } else {
-        // Fallback: assume positional A..F = Season,Week,HomeTeam,AwayTeam,HomePts,AwayPts
-        dataRows = all.slice(firstDataIdx);
-      }
+let usedHeader = false;
+if (hasAll) {
+  // everything after header is candidate data
+  dataRows = all.slice(firstDataIdx + 1);
+  usedHeader = true;
+} else {
+  // fallback: positional A..F
+  dataRows = all.slice(firstDataIdx);
+}
 
-      // Filter out completely blank rows
-      const rows = dataRows.filter(r => r.some(c => c));
+// Consider a row "data" if any of the mapped (or positional) fields is non-empty
+const rows = dataRows.filter((r) => {
+  if (usedHeader) {
+    const fields = [
+      r[map.season!], r[map.week!],
+      r[map.hometeam!], r[map.awayteam!],
+      r[map.homepts!], r[map.awaypts!],
+    ].map(norm);
+    return fields.some(Boolean);
+  } else {
+    const fields = [r[0], r[1], r[2], r[3], r[4], r[5]].map(norm);
+    return fields.some(Boolean);
+  }
+});
 
-      if (rows.length === 0) {
-        await interaction.editReply(`Found header but 0 data rows in **${foundTab}** @ **${idPrint}**.`);
-        return;
-      }
+// --- extra diagnostics to help you verify what the bot sees ---
+const headerMapInfo = usedHeader
+  ? `header map idx: season=${map.season}, week=${map.week}, home=${map.hometeam}, away=${map.awayteam}, homePts=${map.homepts}, awayPts=${map.awaypts}`
+  : 'no header detected (positional A..F)';
+const peek = dataRows.slice(0, 5).map((r, i) => `r${i+1}: ${JSON.stringify(r.slice(0, 10))}`).join('\n');
+// --------------------------------------------------------------
+
+if (rows.length === 0) {
+  await interaction.editReply(
+    `Found header but 0 usable data rows in **${foundTab}** @ **${idPrint}**.\n` +
+    `${headerMapInfo}\n` +
+    `Peek:\n${peek || '(empty)'}`
+  );
+  return;
+}
+
 
       // 3) Parse rows
       let upserts = 0, skipped = 0, settled = 0, wroteLines = 0;
