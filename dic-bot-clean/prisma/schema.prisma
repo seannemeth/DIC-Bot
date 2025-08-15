@@ -8,12 +8,14 @@ datasource db {
 }
 
 model Coach {
-  id        String  @id @default(cuid())
-  team      String  @unique
-  // ...any other fields...
+  id         String  @id @default(cuid())
+  team       String  @unique
+  discordId  String  @unique
+  conference String?
 
-  gamesHome Game[]  @relation("home")
-  gamesAway Game[]  @relation("away")
+  // Relations
+  gamesHome  Game[]  @relation("home")
+  gamesAway  Game[]  @relation("away")
 
   wallet     Wallet?
   purchases  Purchase[]
@@ -23,10 +25,11 @@ model Coach {
 enum GameStatus {
   scheduled
   confirmed
+  pending   // <-- used in loadschedule/ingest
 }
 
 model Game {
-  id           String     @id @default(cuid())
+  id           Int        @id @default(autoincrement())  // <-- INT so TS can pass number
   season       Int
   week         Int
   homeTeam     String
@@ -34,6 +37,7 @@ model Game {
   homePts      Int?
   awayPts      Int?
   status       GameStatus @default(scheduled)
+  messageId    String?    // <-- some code updates messageId
 
   // --- relations to Coach (optional so you can import schedule first) ---
   homeCoachId  String?
@@ -72,7 +76,7 @@ model Line {
 
 model Bet {
   id        Int      @id @default(autoincrement())
-  coachId   Int      // (left as Int since there’s no relation defined; change to String + relation if you want it tied to Coach)
+  coachId   Int      // kept as Int (no relation) to avoid widespread changes
   season    Int
   week      Int
   gameId    Int?
