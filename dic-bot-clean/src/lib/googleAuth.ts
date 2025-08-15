@@ -1,4 +1,4 @@
-import { google } from 'googleapis';
+import { google, sheets_v4 } from 'googleapis';
 
 function decodeBase64Json(b64: string) {
   try {
@@ -14,7 +14,7 @@ export async function getGoogleAuthClient() {
   const email = process.env.GOOGLE_CLIENT_EMAIL?.trim();
   let key = process.env.GOOGLE_PRIVATE_KEY?.trim();
 
-  // Try full JSON first
+  // Try full JSON (base64) first
   if (b64) {
     const parsed = decodeBase64Json(b64);
     if (parsed?.client_email && parsed?.private_key) {
@@ -29,7 +29,7 @@ export async function getGoogleAuthClient() {
 
   // Fallback: email + key
   if (email && key) {
-    if (key.includes('\\n')) key = key.replace(/\\n/g, '\n'); // fix escaped newlines
+    if (key.includes('\\n')) key = key.replace(/\\n/g, '\n');
     return new google.auth.JWT({
       email,
       key,
@@ -38,4 +38,32 @@ export async function getGoogleAuthClient() {
   }
 
   throw new Error('Missing Google credentials. Provide GOOGLE_CREDENTIALS_BASE64 or GOOGLE_CLIENT_EMAIL + GOOGLE_PRIVATE_KEY.');
+}
+
+export async function getSheetsClient(): Promise<sheets_v4.Sheets> {
+  const auth = await getGoogleAuthClient();
+  return google.sheets({ version: 'v4', auth });
+}
+
+/**
+ * Legacy helper used across your codebase.
+ * Returns: { sheets, spreadsheetId, sheetId, title }
+ */
+export async function openSheetByTitle(spreadsheetId: string, title: string) {
+  const sheets = await getSheetsClient();
+
+  const meta = await sheets.spreadsheets.get({ spreadsheetId });
+  const sheet = meta.data.sheets?.find(s => s.properties?.title === title);
+
+  if (!sheet?.properties?.sheetId) {
+    const titles = (meta.data.sheets ?? []).map(s => s.properties?.title).filter(Boolean);
+    throw new Error(`Sheet "${title}" not found. Available tabs: ${titles.join(', ')}`);
+  }
+
+  return {
+    sheets,
+    spreadsheetId,
+    sheetId: sheet.properties.sheetId,
+    title,
+  };
 }
