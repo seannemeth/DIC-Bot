@@ -9,9 +9,7 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-/* ========================
-   League Core
-   ======================== */
+// ===== League Core =====
 
 model Coach {
   id         Int       @id @default(autoincrement())
@@ -26,7 +24,6 @@ model Coach {
 
   wallet     Wallet?
 
-  // Store relations
   purchases  Purchase[]
   upgrades   Upgrade[]
 }
@@ -62,6 +59,7 @@ model Wallet {
   coach   Coach @relation(fields: [coachId], references: [id])
 }
 
+// Lines are primarily in Google Sheets; this table is optional.
 model Line {
   id        Int      @id @default(autoincrement())
   season    Int
@@ -78,8 +76,7 @@ model Line {
   @@index([season, week, homeTeam, awayTeam])
 }
 
-/* Optional DB representation of bets (we primarily grade via Google Sheet Wagers).
-   Keep here if you want to store/extend bets in DB later. */
+// Optional DB representation of bets if you later want to store them here.
 model Bet {
   id        Int      @id @default(autoincrement())
   coachId   Int
@@ -96,14 +93,7 @@ model Bet {
   payout    Int?
 }
 
-model Meta {
-  key   String @id
-  value String
-}
-
-/* ========================
-   Store & Upgrades
-   ======================== */
+// ===== Store & Upgrades =====
 
 enum ItemType {
   COINS
@@ -113,12 +103,12 @@ enum ItemType {
 
 model Item {
   id          Int       @id @default(autoincrement())
-  itemKey     String    @unique        // e.g. "ATTR-BOOST-5" or "COINS-1000"
+  itemKey     String    @unique
   name        String
   description String?
-  price       Int                         // DIC$
+  price       Int
   type        ItemType
-  payload     Json?                       // e.g. {"credit":1000} or {"attribute":"SPD","amount":5}
+  payload     Json?
   enabled     Boolean   @default(true)
   createdAt   DateTime  @default(now())
 
@@ -130,8 +120,8 @@ model Purchase {
   coachId     Int
   itemId      Int
   qty         Int      @default(1)
-  consumed    Int      @default(0)        // how many of the qty have been redeemed/used
-  price       Int?                         // snapshot price (optional)
+  consumed    Int      @default(0)
+  price       Int?
   note        String?
   purchasedAt DateTime @default(now())
 
