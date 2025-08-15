@@ -19,11 +19,11 @@ export const command = {
     .setDescription('Buy an item from the store'),
 
   async execute(interaction: ChatInputCommandInteraction) {
-    // Load items from DB (show only enabled, ordered by name)
+    // Load items (enabled only)
     const items = await prisma.item.findMany({
       where: { enabled: true },
       orderBy: { name: 'asc' },
-      take: 25, // Discord select menus allow max 25 options
+      take: 25, // Discord limit per select menu
     });
 
     if (!items.length) {
@@ -34,7 +34,7 @@ export const command = {
       return;
     }
 
-    // Build options
+    // Build select options
     const options = items.map((item) =>
       new StringSelectMenuOptionBuilder()
         .setLabel(item.name.length > 90 ? item.name.slice(0, 90) : item.name)
@@ -52,21 +52,21 @@ export const command = {
 
     const row = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(menu);
 
-    await interaction.reply({
+    // Send a normal (non-ephemeral) message so we can await the component on it
+    const replyMsg = await interaction.reply({
       content: '🛒 Select the item you want to buy:',
       components: [row],
-      ephemeral: true,
+      // set ephemeral: false by omitting it; collectors need a real message
     });
 
-    // Await exactly one selection on this interaction's original reply
     try {
-      const selectInteraction: StringSelectMenuInteraction =
-        (await interaction.awaitMessageComponent({
-          componentType: ComponentType.StringSelect,
-          time: 30_000,
-          filter: (i) =>
-            i.customId === 'buy_item' && i.user.id === interaction.user.id,
-        })) as StringSelectMenuInteraction;
+      // Wait for the user's selection on this specific message
+      const selectInteraction = (await replyMsg.awaitMessageComponent({
+        componentType: ComponentType.StringSelect,
+        time: 30_000,
+        filter: (i: StringSelectMenuInteraction) =>
+          i.customId === 'buy_item' && i.user.id === interaction.user.id,
+      })) as StringSelectMenuInteraction;
 
       const itemId = parseInt(selectInteraction.values[0], 10);
       const item = await prisma.item.findUnique({ where: { id: itemId } });
@@ -79,8 +79,7 @@ export const command = {
         return;
       }
 
-      // TODO: Replace with your real wallet/coach lookup + balance check + purchase logic.
-      // This is a placeholder "preview" so you can confirm selection UX first.
+      // Preview/confirm embed (you can replace with real purchase logic)
       const preview = new EmbedBuilder()
         .setTitle(`Confirm purchase`)
         .setDescription(
@@ -95,22 +94,21 @@ export const command = {
         ephemeral: true,
       });
 
-      // If you want immediate purchase flow, put it here:
-      // 1) find coach by discord id (if you store it)
-      // 2) check wallet >= item.price
-      // 3) decrement wallet, create Purchase row, apply ITEM effect (if needed)
-      // 4) reply with success or insufficient funds
+      // TODO:
+      // - Identify the buyer's coach/wallet
+      // - Check balance >= item.price
+      // - Deduct, create Purchase row, apply effect
+      // - Acknowledge success/failure
+
+      // Optionally remove the menu after selection
+      await replyMsg.edit({ components: [] }).catch(() => {});
 
     } catch {
-      // timed out or aborted
-      try {
-        await interaction.editReply({
-          content: '⏱️ No selection made.',
-          components: [],
-        });
-      } catch {
-        /* ignore */
-      }
+      // Timed out—clean up components
+      await replyMsg.edit({
+        content: '⏱️ No selection made.',
+        components: [],
+      }).catch(() => {});
     }
   },
 } as const;
