@@ -55,13 +55,13 @@ client.once('ready', async () => {
   console.log(`Logged in as ${client.user?.tag}`);
 
   // Diagnose which command is invalid
-for (const [name, cmd] of commands) {
-  try {
-    cmd.data.toJSON();
-  } catch (e) {
-    console.error('[SLASH BUILD ERROR] in command:', name, e);
+  for (const [name, cmd] of commands) {
+    try {
+      cmd.data.toJSON();
+    } catch (e) {
+      console.error('[SLASH BUILD ERROR] in command:', name, e);
+    }
   }
-}
 
   // Register slash commands for each guild the bot is in
   try {
@@ -79,6 +79,19 @@ for (const [name, cmd] of commands) {
 });
 
 client.on('interactionCreate', async (interaction: Interaction) => {
+  // ✅ Autocomplete support
+  if (interaction.isAutocomplete()) {
+    const cmd = commands.get(interaction.commandName);
+    if (cmd?.autocomplete) {
+      try {
+        await cmd.autocomplete(interaction);
+      } catch (e) {
+        console.error('[AC ERROR]', e);
+      }
+    }
+    return;
+  }
+
   if (!interaction.isChatInputCommand()) return;
 
   const cmd = commands.get(interaction.commandName);
@@ -104,6 +117,7 @@ client.on('interactionCreate', async (interaction: Interaction) => {
     } catch {}
   }
 });
+
 const token = process.env.DISCORD_TOKEN;
 if (!token || typeof token !== 'string') {
   throw new Error('DISCORD_TOKEN is missing. Set it in Railway Variables.');
