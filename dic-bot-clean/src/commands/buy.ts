@@ -9,7 +9,7 @@ import {
   type StringSelectMenuInteraction,
   EmbedBuilder,
 } from 'discord.js';
-import { PrismaClient, type Item } from '@prisma/client';
+import { PrismaClient } from '@prisma/client';
 import { syncStoreFromSheet } from '../lib/storeSheet';
 
 const prisma = new PrismaClient();
@@ -77,12 +77,13 @@ export const command = {
       }
     }
 
-    // 3) Load enabled items
-    const items: Item[] = await prisma.item.findMany({
+    // 3) Load enabled items (infer type from query)
+    const items = await prisma.item.findMany({
       where: { enabled: true },
       orderBy: { name: 'asc' },
       take: 25, // Discord select menus max 25 options
     });
+    type ItemRow = typeof items[number];
 
     if (!items.length) {
       const first = await prisma.item.findFirst({ orderBy: { id: 'asc' } });
@@ -97,12 +98,12 @@ export const command = {
     }
 
     // 4) Build the select menu
-    const options = items.map((item: Item) =>
+    const options = items.map((item: ItemRow) =>
       new StringSelectMenuOptionBuilder()
         .setLabel(item.name.length > 90 ? item.name.slice(0, 90) : item.name)
         .setDescription(
           `${item.price} coins` +
-          (item.description ? ` — ${item.description.slice(0, 80)}` : '')
+            (item.description ? ` — ${item.description.slice(0, 80)}` : '')
         )
         .setValue(item.id.toString())
     );
@@ -114,6 +115,7 @@ export const command = {
 
     const row = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(menu);
 
+    // Send a normal message so we can await the component interaction on it
     const replyMsg = await interaction.reply({
       content: '🛒 Select the item you want to buy:',
       components: [row],
@@ -139,7 +141,7 @@ export const command = {
         return;
       }
 
-      // Preview/confirm
+      // Preview/confirm (replace with real purchase flow)
       const preview = new EmbedBuilder()
         .setTitle(`Confirm purchase`)
         .setDescription(
@@ -152,9 +154,10 @@ export const command = {
         ephemeral: true,
       });
 
-      // Optional: remove menu
+      // Optional: remove the menu after selection
       await replyMsg.edit({ components: [] }).catch(() => {});
     } catch {
+      // Timeout: clean up
       await replyMsg
         .edit({ content: '⏱️ No selection made.', components: [] })
         .catch(() => {});
