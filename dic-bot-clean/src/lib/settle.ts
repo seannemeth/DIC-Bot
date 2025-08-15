@@ -1,3 +1,4 @@
+// src/lib/settle.ts
 import { PrismaClient } from '@prisma/client';
 import { openSheetByTitle } from './googleAuth';
 
@@ -29,14 +30,70 @@ function payoutTotal(stake: number, americanOdds: number): number {
   return stake * (1 + 100 / Math.abs(americanOdds));
 }
 
+/** Lightweight mapper: rows[][] -> [{...}, ...] using headers; also includes __rowNumber */
+function mapSheetRowsToObjects(allRows: string[][], title: string): Array<Record<string, any> & { __rowNumber: number }> {
+  if (!allRows.length) return [];
+  const header = (allRows[0] ?? []).map(h => (h ?? '').toString().trim());
+  const out: Array<Record<string, any> & { __rowNumber: number }> = [];
+  for (let i = 1; i < allRows.length; i++) {
+    const row = allRows[i] ?? [];
+    const obj: Record<string, any> & { __rowNumber: number } = { __rowNumber: i + 1 }; // 1-indexed in Sheets
+    for (let j = 0; j < header.length; j++) {
+      const key = header[j] || `Col${j + 1}`;
+      obj[key] = row[j] ?? '';
+    }
+    out.push(obj);
+  }
+  return out;
+}
+
+/** Update a single row (by absolute row number) with the given fields, using the header order. */
+async function updateRowByNumber(
+  sheetCtx: { sheets: any; spreadsheetId: string; title: string },
+  rowNumber: number,
+  fields: Record<string, any>
+) {
+  const { sheets, spreadsheetId, title } = sheetCtx;
+
+  // Fetch header to preserve column order
+  const headerResp = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: `${title}!1:1`,
+  });
+  const header: string[] = (headerResp.data.values?.[0] ?? []).map((h: any) => (h ?? '').toString().trim());
+
+  // Fetch the existing row to merge (optional — if you want to keep untouched columns)
+  const rowResp = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: `${title}!A${rowNumber}:Z${rowNumber}`,
+  });
+  const existing: string[] = rowResp.data.values?.[0] ?? [];
+
+  // Build updated row aligned to header
+  const nextRow = header.map((h, idx) => {
+    const v = fields.hasOwnProperty(h) ? fields[h] : existing[idx] ?? '';
+    if (v === null || v === undefined) return '';
+    if (typeof v === 'number') return v;
+    return String(v);
+  });
+
+  await sheets.spreadsheets.values.update({
+    spreadsheetId,
+    range: `${title}!A${rowNumber}:Z${rowNumber}`,
+    valueInputOption: 'USER_ENTERED',
+    requestBody: { values: [nextRow] },
+  });
+}
+
 async function readLinesRow(season: number, week: number, homeTeam: string, awayTeam: string) {
   const sheetId = process.env.GOOGLE_SHEET_ID || '';
   const linesSheet = await openSheetByTitle(sheetId, 'Lines');
-  const rows: any[] = await linesSheet.getRows();
+  const allRows: string[][] = await linesSheet.getRows();
+  const rows = mapSheetRowsToObjects(allRows, linesSheet.title);
 
   const match = rows.find(r =>
-    String(r.Season ?? '') == String(season) &&
-    String(r.Week ?? '') == String(week) &&
+    String(r.Season ?? '') === String(season) &&
+    String(r.Week ?? '') === String(week) &&
     String((r.HomeTeam ?? '')).trim() === homeTeam &&
     String((r.AwayTeam ?? '')).trim() === awayTeam
   );
@@ -118,11 +175,16 @@ function gradeWager(
 async function writeWagerSettlementToSheet(betId: string, fields: Record<string, any>) {
   const sheetId = process.env.GOOGLE_SHEET_ID || '';
   const wagersSheet = await openSheetByTitle(sheetId, 'Wagers');
-  const rows: any[] = await wagersSheet.getRows();
-  const row = rows.find((r: any) => String(r.BetId ?? '') === betId);
+  const allRows: string[][] = await wagersSheet.getRows();
+  const rows = mapSheetRowsToObjects(allRows, wagersSheet.title);
+  const row = rows.find(r => String(r.BetId ?? '') === betId);
   if (!row) return false;
-  Object.entries(fields).forEach(([k, v]) => (row[k] = v));
-  await row.save();
+
+  await updateRowByNumber(
+    { sheets: wagersSheet.sheets, spreadsheetId: wagersSheet.spreadsheetId, title: wagersSheet.title },
+    row.__rowNumber,
+    fields
+  );
   return true;
 }
 
@@ -147,10 +209,13 @@ export async function settleWagersForGame(gameId: number) {
   // Get all pending wagers for this matchup from the Wagers sheet (by Season/Week/Teams)
   const sheetId = process.env.GOOGLE_SHEET_ID || '';
   const wagersSheet = await openSheetByTitle(sheetId, 'Wagers');
-  const rows: any[] = await wagersSheet.getRows();
-  const candidates = rows.filter((r: any) =>
-    String(r.Season ?? '') == String(game.season ?? '') &&
-    String(r.Week ?? '') == String(game.week ?? '') &&
+  const allRows: string[][] = await wagersSheet.getRows();
+  const rows = mapSheetRowsToObjects(allRows, wagersSheet.title);
+
+  // Header-aware filter (Status not SETTLED/VOID)
+  const candidates = rows.filter(r =>
+    String(r.Season ?? '') === String(game.season ?? '') &&
+    String(r.Week ?? '') === String(game.week ?? '') &&
     String((r.HomeTeam ?? '')).trim() === game.homeTeam &&
     String((r.AwayTeam ?? '')).trim() === game.awayTeam &&
     String(r.Status ?? '').toUpperCase() !== 'SETTLED' &&
@@ -158,13 +223,13 @@ export async function settleWagersForGame(gameId: number) {
   );
 
   // Grade and aggregate wallet changes
-  const creditsByCoach: Map<number, number> = new Map();
+  const creditsByCoach: Map<string, number> = new Map(); // coachId is STRING now
 
   for (const r of candidates) {
     const market = String(r.Market ?? '').toUpperCase() as 'SPREAD'|'TOTAL'|'ML';
     const selection = String(r.Selection ?? '').toUpperCase() as 'HOME'|'AWAY'|'OVER'|'UNDER';
     const stake = Number(r.Stake ?? 0);
-    const coachId = Number(r.CoachId ?? 0);
+    const coachId = String(r.CoachId ?? '').trim(); // string to match Wallet.coachId
     const betId = String(r.BetId ?? '');
 
     if (!stake || !coachId || !market || !selection) continue;
@@ -175,28 +240,34 @@ export async function settleWagersForGame(gameId: number) {
       line, stake
     );
 
-    // Accrue wallet credit (only payout amount; stake already debited on placebet)
+    // Accrue wallet credit (includes stake for WIN / PUSH)
     if (payout > 0) {
-      const add = payout; // includes stake for WIN / PUSH
+      const add = payout;
       creditsByCoach.set(coachId, (creditsByCoach.get(coachId) ?? 0) + add);
     }
 
     // Update this row in the sheet
-    r.Status = 'SETTLED';
-    r.Result = result;
-    r.Payout = Math.round(payout); // or keep decimals if you prefer
-    await r.save();
+    await updateRowByNumber(
+      { sheets: wagersSheet.sheets, spreadsheetId: wagersSheet.spreadsheetId, title: wagersSheet.title },
+      r.__rowNumber,
+      {
+        Status: 'SETTLED',
+        Result: result,
+        Payout: Math.round(payout),
+      }
+    );
 
-    // Optionally: if you want to also keep a copy in DB, you can add a Wager model and persist here.
-    // For now we treat the Sheet as source of truth for wager rows.
+    // If you also want to write a settlement timestamp:
+    // await updateRowByNumber(..., r.__rowNumber, { SettledAt: new Date().toISOString() });
   }
 
   // Credit wallets in DB (bulk)
   for (const [coachId, amount] of creditsByCoach.entries()) {
+    const credit = Math.round(amount);
     await prisma.wallet.upsert({
       where: { coachId },
-      create: { coachId, balance: Math.round(amount) },
-      update: { balance: { increment: Math.round(amount) } },
+      create: { coachId, balance: credit },
+      update: { balance: { increment: credit } },
     });
   }
 }
