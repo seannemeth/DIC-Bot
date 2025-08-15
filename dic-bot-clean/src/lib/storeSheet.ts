@@ -1,6 +1,6 @@
 // src/lib/storeSheet.ts
 import { google } from 'googleapis';
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, ItemType } from '@prisma/client';
 import { getGoogleAuthClient } from './googleAuth';
 
 const TAB = (process.env.STORE_TAB_NAME || 'Store').trim();
@@ -43,15 +43,12 @@ function parseBool(s: string): boolean | undefined {
   return undefined;
 }
 
-// Normalize type text from sheet -> plain string (fallback 'TOKEN')
-// If your DB expects specific strings, list them below.
-function parseType(s: string): string {
-  const t = keyify(s).toUpperCase(); // keyify() lowers; then upper
-  if (t === 'COINS') return 'COINS';
-  if (t === 'ATTR')  return 'ATTR';
-  if (t === 'TOKEN') return 'TOKEN';
-  // fallback
-  return 'TOKEN';
+// Normalize sheet text -> ItemType enum (default TOKEN)
+function parseType(s: string): ItemType {
+  const t = norm(s).toUpperCase();
+  if (t === 'COINS') return ItemType.COINS;
+  if (t === 'ATTR')  return ItemType.ATTR;
+  return ItemType.TOKEN; // default
 }
 
 export type StoreSyncResult = {
@@ -111,7 +108,7 @@ export async function syncStoreFromSheet(): Promise<StoreSyncResult> {
     if (!itemKey || !name || !Number.isFinite(price)) { skipped++; continue; }
 
     const enabled = parseBool(enabledRaw);
-    const type = parseType(typeRaw); // now plain string
+    const type = parseType(typeRaw); // ItemType enum
 
     let payload: any = undefined;
     if (payloadRaw) {
@@ -127,7 +124,7 @@ export async function syncStoreFromSheet(): Promise<StoreSyncResult> {
       update: {
         name,
         price: Math.trunc(price),
-        type, // string
+        type, // ItemType
         description: description || null,
         enabled: enabled ?? true,
         payload,
@@ -136,7 +133,7 @@ export async function syncStoreFromSheet(): Promise<StoreSyncResult> {
         itemKey,
         name,
         price: Math.trunc(price),
-        type, // string
+        type, // ItemType
         description: description || null,
         enabled: enabled ?? true,
         payload,
