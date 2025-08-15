@@ -14,33 +14,42 @@ const SPREADSHEET_ID =
 
 const TAB = (process.env.COACHES_TAB_NAME || 'Coaches').trim();
 /**
- * Expected columns in Coaches tab (case-insensitive, flexible spacing):
+ * Expected columns in Coaches tab (case-insensitive):
  * DiscordId | Handle | Team | Conference | (optional) Coins
- * Only "Team" is required. Coins defaults to 500 if missing/invalid.
+ * Required: DiscordId, Team
+ * Optional: Coins (defaults to 500)
  */
 
 function norm(v: unknown) { return String(v ?? '').trim(); }
 function keyify(s: string) { return s.toLowerCase().replace(/[^a-z0-9]+/g, ''); }
 
-// header aliases → canonical keys we care about
-const aliases: Record<string, 'team' | 'coins' | 'ignore'> = {
+// Map header -> canonical keys we use
+type Canon = 'discordid' | 'team' | 'coins' | 'ignore';
+const aliases: Record<string, Canon> = {
+  // required
+  discordid: 'discordid', userid: 'discordid', user: 'discordid', id: 'discordid',
+  // required
   team: 'team', school: 'team', program: 'team', name: 'team',
+  // optional
   coins: 'coins', balance: 'coins', startingcoins: 'coins', startcoins: 'coins',
-  // we ignore these for now (not in schema):
-  discordid: 'ignore', handle: 'ignore', coach: 'ignore', conference: 'ignore',
+  // ignored for now
+  handle: 'ignore', coach: 'ignore', username: 'ignore', conference: 'ignore',
 };
 
 function mapHeader(header: string[]) {
-  const map: Partial<Record<'team'|'coins', number>> = {};
+  const map: Partial<Record<'discordid'|'team'|'coins', number>> = {};
   header.forEach((h, i) => {
     const a = aliases[keyify(h)] ?? 'ignore';
-    if (a !== 'ignore' && map[a] == null) map[a] = i;
+    if (a !== 'ignore' && map[a as 'discordid'|'team'|'coins'] == null) {
+      map[a as 'discordid'|'team'|'coins'] = i;
+    }
   });
+  const hasDiscord = map.discordid != null;
   const hasTeam = map.team != null;
-  return { map, hasTeam };
+  return { map, hasDiscord, hasTeam };
 }
 
-// Clean up team strings like "TCU(jak1741)" -> "TCU", collapse spaces, trim.
+// Clean team strings like "TCU(jak1741)" -> "TCU"
 function sanitizeTeam(raw: string) {
   return raw.replace(/\s*\([^)]*\)\s*$/, '').replace(/\s+/g, ' ').trim();
 }
@@ -76,7 +85,7 @@ export const command = {
       const resp = await sheets.spreadsheets.values.get({ spreadsheetId: SPREADSHEET_ID, range });
       const all = (resp.data.values ?? []).map(r => r.map(norm));
 
-      // Skip leading empty rows
+      // Skip leading empties
       let first = 0;
       while (first < all.length && all[first].every(c => !c)) first++;
       if (first >= all.length) {
@@ -85,10 +94,11 @@ export const command = {
       }
 
       const header = all[first];
-      const { map, hasTeam } = mapHeader(header);
-      if (!hasTeam) {
+      const { map, hasDiscord, hasTeam } = mapHeader(header);
+      if (!hasDiscord || !hasTeam) {
         await interaction.editReply(
-          `❌ Header must include a Team column (aliases: Team/School/Program/Name). Got: ${JSON.stringify(header)}`
+          `❌ Header must include **DiscordId** and **Team**.\n` +
+          `Got: ${JSON.stringify(header)}`
         );
         return;
       }
@@ -99,31 +109,32 @@ export const command = {
       const samples: string[] = [];
 
       for (const r of data) {
-        const teamRaw = map.team != null ? norm(r[map.team]) : '';
+        const discordId = norm(r[map.discordid!]);
+        const teamRaw = norm(r[map.team!]);
         const team = sanitizeTeam(teamRaw);
-        if (!team) { skipped++; continue; }
+        if (!discordId || !team) { skipped++; continue; }
 
         const coinsRaw = map.coins != null ? norm(r[map.coins]) : '';
         const coinsNum = Number(coinsRaw);
         const coins = Number.isFinite(coinsNum) ? Math.trunc(coinsNum) : 500;
 
-        // Upsert coach by team (team is unique in your schema)
+        // Upsert coach BY discordId (required by your schema), set team
         const coach = await prisma.coach.upsert({
-          where: { team },
-          update: {}, // nothing else in current schema
-          create: { team },
+          where: { discordId },
+          update: { team },
+          create: { discordId, team },
         });
         upserts++;
 
-        // Ensure wallet exists and set desired balance
+        // Ensure wallet exists & set balance to Coins (id type must match your schema: string)
         await prisma.wallet.upsert({
-          where: { coachId: coach.id as any },
-          create: { coachId: coach.id as any, balance: coins, season: 1 },
+          where: { coachId: coach.id },
+          create: { coachId: coach.id, balance: coins, season: 1 },
           update: { balance: { set: coins } },
         });
         wallets++;
 
-        if (samples.length < 6) samples.push(`${team} • coins=${coins}`);
+        if (samples.length < 6) samples.push(`${discordId} • ${team} • coins=${coins}`);
       }
 
       await interaction.editReply(
