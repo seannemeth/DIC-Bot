@@ -1,13 +1,17 @@
-import { PrismaClient, Game } from '@prisma/client';
+// src/lib/schedules.ts
+import { PrismaClient } from '@prisma/client';
 const prisma = new PrismaClient();
 
+// Infer your Game row type from the query result
+type GameRow = Awaited<ReturnType<typeof prisma.game.findMany>>[number];
+
 export type WeekSchedule = {
-  games: Game[];
-  played: Game[];
-  remaining: Game[];
+  games: GameRow[];
+  played: GameRow[];
+  remaining: GameRow[];
 };
 
-function isPlayed(g: Game): boolean {
+function isPlayed(g: GameRow): boolean {
   return (g.homePts != null && g.awayPts != null) || g.status === 'confirmed';
 }
 
@@ -18,7 +22,7 @@ export async function getWeekSchedule(season: number, week: number): Promise<Wee
   });
 
   const played = games.filter(isPlayed);
-  const remaining = games.filter(g => !isPlayed(g));
+  const remaining = games.filter((g: GameRow) => !isPlayed(g));
 
   return { games, played, remaining };
 }
