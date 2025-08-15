@@ -15,6 +15,10 @@ import { getWeekSchedule } from '../lib/schedules';
 
 const prisma = new PrismaClient();
 
+/** Lightweight shapes we use here (keeps TS happy without overfitting to DB types) */
+type SchedGame = { homeTeam: string; awayTeam: string; status?: string; homePts?: number; awayPts?: number };
+type DbGame = { id: number; homeTeam: string; awayTeam: string; homePts: number | null; awayPts: number | null; status: string };
+
 // ---------- Canonicalization helpers (keep in this file or move to lib) ----------
 function sanitizeTeam(raw: string) {
   return String(raw ?? '').replace(/\s*\([^)]*\)\s*$/, '').replace(/\s+/g, ' ').trim();
@@ -56,11 +60,13 @@ export const command = {
 
     // Get week schedule and filter out already-played using canonical keys
     const { played, remaining } = await getWeekSchedule(season, week);
+
     const playedSet = new Set<string>(
-      (played as any[]).map(g => matchupKey(g.homeTeam, g.awayTeam))
+      (played as SchedGame[]).map((g: SchedGame) => matchupKey(g.homeTeam, g.awayTeam))
     );
-    const remainingFiltered = (remaining as any[]).filter(
-      g => !playedSet.has(matchupKey(g.homeTeam, g.awayTeam))
+
+    const remainingFiltered = (remaining as SchedGame[]).filter(
+      (g: SchedGame) => !playedSet.has(matchupKey(g.homeTeam, g.awayTeam))
     );
 
     if (!remainingFiltered.length) {
@@ -69,7 +75,7 @@ export const command = {
     }
 
     // Build select menu (Discord max 25 options)
-    const options = remainingFiltered.slice(0, 25).map((g: any) => {
+    const options = remainingFiltered.slice(0, 25).map((g: SchedGame) => {
       const label = `${sanitizeTeam(g.homeTeam)} vs ${sanitizeTeam(g.awayTeam)}`;
       const value = JSON.stringify({ s: season, w: week, h: g.homeTeam, a: g.awayTeam });
       return new StringSelectMenuOptionBuilder().setLabel(label).setValue(value);
@@ -163,7 +169,9 @@ export async function handlePostScoreModal(interaction: Interaction) {
     });
 
     const wantedKey = matchupKey(payload.h, payload.a);
-    const game = games.find(g => matchupKey(g.homeTeam, g.awayTeam) === wantedKey);
+    const game = (games as DbGame[]).find(
+      (g: DbGame) => matchupKey(g.homeTeam, g.awayTeam) === wantedKey
+    );
 
     if (!game) {
       await interaction.editReply(
@@ -185,7 +193,7 @@ export async function handlePostScoreModal(interaction: Interaction) {
       data: {
         homePts: nextHomePts,
         awayPts: nextAwayPts,
-        status: 'confirmed' as any, // cast in case your enum type is strict
+        status: 'confirmed' as any, // cast if your schema type is stricter
         // played: true, // uncomment if you track a played boolean
       },
       select: { homeTeam: true, awayTeam: true, homePts: true, awayPts: true },
