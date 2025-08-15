@@ -158,9 +158,3 @@ model StreamSub {
   @@unique([platform, channelKey])
   @@index([ownerDiscordId])
 }
-
-  note      String?
-  createdAt DateTime @default(now())
-
-  coach Coach @relation(fields: [coachId], references: [id])
-}
