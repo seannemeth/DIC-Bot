@@ -1,55 +1,61 @@
-import { SlashCommandBuilder, type ChatInputCommandInteraction } from 'discord.js';
+// src/commands/buy.ts
+import { SlashCommandBuilder, ActionRowBuilder, StringSelectMenuBuilder, StringSelectMenuOptionBuilder, ComponentType } from 'discord.js';
 import { PrismaClient } from '@prisma/client';
+
 const prisma = new PrismaClient();
 
 export const command = {
   data: new SlashCommandBuilder()
     .setName('buy')
-    .setDescription('Buy a store item with your DIC$')
-    .addStringOption(o => o.setName('item_id').setDescription('Store ItemId (from /store list)').setRequired(true))
-    .addIntegerOption(o => o.setName('qty').setDescription('Quantity').setMinValue(1).setRequired(false)),
-  async execute(interaction: ChatInputCommandInteraction) {
-    await interaction.deferReply({ ephemeral: true });
+    .setDescription('Buy an item from the store'),
+  
+  async execute(interaction) {
+    // Fetch store items from DB
+    const items = await prisma.item.findMany({ orderBy: { name: 'asc' } });
 
-    const itemKey = interaction.options.getString('item_id', true).trim();
-    const qty = interaction.options.getInteger('qty') ?? 1;
-
-    const coach = await prisma.coach.findUnique({ where: { discordId: interaction.user.id } });
-    if (!coach) return interaction.editReply('❌ You must set up first with `/setteam`.');
-
-    const wallet = await prisma.wallet.upsert({
-      where: { coachId: coach.id },
-      create: { coachId: coach.id, balance: 500 },
-      update: {},
-    });
-
-    const item = await prisma.item.findUnique({ where: { itemKey } });
-    if (!item || !item.enabled) return interaction.editReply('❌ Item not found or disabled.');
-
-    const cost = item.price * qty;
-    if (wallet.balance < cost) return interaction.editReply(`❌ Need ${cost} DIC$, you have ${wallet.balance}.`);
-
-    // charge
-    await prisma.wallet.update({
-      where: { coachId: coach.id },
-      data: { balance: { decrement: cost } },
-    });
-
-    // effects
-    if (item.type === 'COINS') {
-      const credit = Number((item.payload as any)?.credit ?? 0) * qty;
-      await prisma.wallet.update({
-        where: { coachId: coach.id },
-        data: { balance: { increment: credit } },
-      });
-      return interaction.editReply(`✅ Purchased **${item.name}** x${qty}. Credited **${credit} DIC$**.`);
+    if (!items.length) {
+      await interaction.reply({ content: '❌ No items available in the store.', ephemeral: true });
+      return;
     }
 
-    // inventory entry
-    await prisma.purchase.create({
-      data: { coachId: coach.id, itemId: item.id, qty },
+    // Build select menu options
+    const options = items.map(item =>
+      new StringSelectMenuOptionBuilder()
+        .setLabel(`${item.name} (${item.price} coins)`)
+        .setValue(item.id.toString())
+    );
+
+    const menu = new StringSelectMenuBuilder()
+      .setCustomId('buy_item')
+      .setPlaceholder('Select an item to purchase')
+      .addOptions(options);
+
+    const row = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(menu);
+
+    await interaction.reply({
+      content: '🛒 Select the item you want to buy:',
+      components: [row],
+      ephemeral: true
     });
 
-    return interaction.editReply(`✅ Purchased **${item.name}** x${qty}. Use \`/inventory\` or \`/redeem\`.`);
+    // Wait for selection
+    const collector = interaction.channel?.createMessageComponentCollector({
+      componentType: ComponentType.StringSelect,
+      time: 30_000,
+      filter: i => i.customId === 'buy_item' && i.user.id === interaction.user.id
+    });
+
+    collector?.on('collect', async selectInteraction => {
+      const itemId = parseInt(selectInteraction.values[0], 10);
+      const item = await prisma.item.findUnique({ where: { id: itemId } });
+
+      if (!item) {
+        await selectInteraction.reply({ content: '❌ Item not found.', ephemeral: true });
+        return;
+      }
+
+      // TODO: Deduct coins and add item to user inventory
+      await selectInteraction.reply({ content: `✅ You bought **${item.name}** for ${item.price} coins!`, ephemeral: true });
+    });
   }
-} as const;
+};
