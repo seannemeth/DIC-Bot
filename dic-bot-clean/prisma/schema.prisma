@@ -8,15 +8,12 @@ datasource db {
 }
 
 model Coach {
-  id         Int       @id @default(autoincrement())
-  discordId  String    @unique
-  handle     String
-  team       String?   @unique
-  conference String?
-  createdAt  DateTime  @default(now())
+  id        String  @id @default(cuid())
+  team      String  @unique
+  // ...any other fields...
 
-  gamesHome  Game[]    @relation("home")
-  gamesAway  Game[]    @relation("away")
+  gamesHome Game[]  @relation("home")
+  gamesAway Game[]  @relation("away")
 
   wallet     Wallet?
   purchases  Purchase[]
@@ -29,7 +26,6 @@ enum GameStatus {
   confirmed
 }
 
-// Replace your Game model with this
 model Game {
   id           String     @id @default(cuid())
   season       Int
@@ -40,16 +36,16 @@ model Game {
   awayPts      Int?
   status       GameStatus @default(scheduled)
 
-  // Optional so you can import schedule before coaches are set
+  // --- relations to Coach (optional so you can import schedule first) ---
   homeCoachId  String?
   awayCoachId  String?
 
-  // If you have Coach relations, keep them optional like this:
-  // homeCoach    Coach?   @relation(fields: [homeCoachId], references: [id])
-  // awayCoach    Coach?   @relation(fields: [awayCoachId], references: [id])
+  homeCoach    Coach?     @relation("home", fields: [homeCoachId], references: [id])
+  awayCoach    Coach?     @relation("away", fields: [awayCoachId], references: [id])
 
   @@unique([season, week, homeTeam, awayTeam])
 }
+
 
 
 model Wallet {
