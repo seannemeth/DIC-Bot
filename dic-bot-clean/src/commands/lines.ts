@@ -13,12 +13,11 @@ export const command = {
 
   async execute(interaction: ChatInputCommandInteraction) {
     await interaction.deferReply();
-
     try {
       const sheet = await openSheetByTitle('Lines');
+
       // Expected headers: Season | Week | HomeTeam | AwayTeam | Spread | Total | HomeML | AwayML | Cutoff
       const rows: any[] = await sheet.getRows({ limit: 25 });
-
       if (!rows.length) {
         await interaction.editReply('No lines available yet on the **Lines** tab.');
         return;
