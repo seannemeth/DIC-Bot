@@ -1,4 +1,3 @@
-// src/commands/schedule.ts
 import { SlashCommandBuilder, type ChatInputCommandInteraction, EmbedBuilder } from 'discord.js';
 import { getWeekSchedule } from '../lib/schedule';
 
@@ -10,6 +9,7 @@ export const command = {
     .addIntegerOption(o => o.setName('week').setDescription('Week').setRequired(true)),
   async execute(interaction: ChatInputCommandInteraction) {
     await interaction.deferReply({ ephemeral: true });
+
     const season = interaction.options.getInteger('season', true);
     const week = interaction.options.getInteger('week', true);
 
