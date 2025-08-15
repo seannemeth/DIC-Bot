@@ -53,12 +53,14 @@ model Game {
 }
 
 model Wallet {
-  id       Int     @id @default(autoincrement())
-  coachId  String  @unique
-  balance  Int     @default(500)
-  season   Int     @default(1)
+  id        String   @id @default(cuid())
+  coachId   String   @unique
+  season    Int      @default(1)
+  balance   Int      @default(0)
+  note      String?
+  createdAt DateTime @default(now())
 
-  coach    Coach   @relation(fields: [coachId], references: [id])
+  coach Coach @relation(fields: [coachId], references: [id], onDelete: Cascade)
 }
 
 model Line {
