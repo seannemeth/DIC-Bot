@@ -1,4 +1,3 @@
-// src/commands/store_sync.ts
 import { SlashCommandBuilder, type ChatInputCommandInteraction } from 'discord.js';
 import { PrismaClient } from '@prisma/client';
 import { syncStoreFromSheet } from '../lib/storeSheet';
@@ -14,7 +13,9 @@ export const command = {
     try {
       const res = await syncStoreFromSheet();
       const count = await prisma.item.count();
-      await interaction.editReply(`✅ Store synced. Upserts: ${res.upserts}, skipped: ${res.skipped}/${res.totalRows}. Items in DB: ${count}.\n${res.diag}`);
+      await interaction.editReply(
+        `✅ Store synced. Upserts: ${res.upserts}, skipped: ${res.skipped}/${res.totalRows}. Items in DB: ${count}.\n${res.diag}`
+      );
     } catch (e: any) {
       await interaction.editReply(`❌ Store sync failed: ${e?.message || e}`);
     }
