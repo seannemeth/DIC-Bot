@@ -1,67 +1,133 @@
-// inside the 'list' branch of src/commands/store.ts
-const lines = items.map((i: any) =>
-  `**${i.itemKey}** — ${i.name} • ${i.price} DIC$\n${i.description ?? ''}`.trim()
-);
-import { SlashCommandBuilder, type ChatInputCommandInteraction } from 'discord.js';
+import {
+  SlashCommandBuilder,
+  EmbedBuilder,
+  type ChatInputCommandInteraction
+} from 'discord.js';
 import { PrismaClient } from '@prisma/client';
+import { refreshStoreFromSheet } from '../lib/storeSheet'; // keep if you want /store refresh
+
 const prisma = new PrismaClient();
 
 export const command = {
   data: new SlashCommandBuilder()
     .setName('store')
-    .setDescription('View or buy store items')
+    .setDescription('Browse or manage the DIC store')
     .addSubcommand(sc =>
       sc.setName('list')
-        .setDescription('List store items'))
+        .setDescription('List store items'),
+    )
     .addSubcommand(sc =>
       sc.setName('buy')
         .setDescription('Buy a store item')
-        .addStringOption(o => o.setName('item').setDescription('Item key').setRequired(true))
-        .addStringOption(o => o.setName('note').setDescription('Optional note'))),
+        .addStringOption(o =>
+          o.setName('item')
+            .setDescription('Item key (see /store list)')
+            .setRequired(true),
+        )
+        .addIntegerOption(o =>
+          o.setName('qty')
+            .setDescription('Quantity (default 1)')
+            .setMinValue(1),
+        )
+        .addStringOption(o =>
+          o.setName('note')
+            .setDescription('Optional note'),
+        ),
+    )
+    .addSubcommand(sc =>
+      sc.setName('refresh')
+        .setDescription('Admin: refresh items from Google Sheet'),
+    ),
+
   async execute(interaction: ChatInputCommandInteraction) {
     const sub = interaction.options.getSubcommand();
 
+    // /store list
     if (sub === 'list') {
-      const items = await prisma.item.findMany({ where: { enabled: true }, orderBy: { price: 'asc' } });
-      if (!items.length) return interaction.reply({ content: 'No store items available.', ephemeral: true });
+      await interaction.deferReply({ ephemeral: true });
 
-      const lines = items.map((i: any) =>
+      const dbItems = await prisma.item.findMany({
+        where: { enabled: true },
+        orderBy: { price: 'asc' },
+      });
+
+      if (!dbItems.length) {
+        return interaction.editReply('No store items available. (Run `/store refresh` if you just added them to the Sheet.)');
+      }
+
+      const lines = dbItems.map((i: any) =>
         `**${i.itemKey}** — ${i.name} • ${i.price} DIC$\n${i.description ?? ''}`.trim()
       );
 
-      return interaction.reply({ content: lines.join('\n\n'), ephemeral: true });
+      const embed = new EmbedBuilder()
+        .setTitle('DIC Store')
+        .setDescription(lines.join('\n\n'))
+        .setColor(0xf1c40f);
+
+      return interaction.editReply({ embeds: [embed] });
     }
 
+    // /store buy
     if (sub === 'buy') {
-      const coach = await prisma.coach.findUnique({ where: { discordId: interaction.user.id } });
-      if (!coach) return interaction.reply({ content: '❌ You must set up first with `/setteam`.', ephemeral: true });
+      await interaction.deferReply({ ephemeral: true });
 
-      const itemKey = interaction.options.getString('item', true);
-      const note = interaction.options.getString('note') || null;
+      const itemKey = interaction.options.getString('item', true).trim();
+      const qty = interaction.options.getInteger('qty') ?? 1;
+      const note = interaction.options.getString('note') ?? null;
 
-      const item = await prisma.item.findUnique({ where: { itemKey } });
-      if (!item) return interaction.reply({ content: '❌ Item not found.', ephemeral: true });
-
-      const wallet = await prisma.wallet.findUnique({ where: { coachId: coach.id } });
-      if (!wallet || wallet.balance < item.price) {
-        return interaction.reply({ content: '❌ Not enough DIC$.', ephemeral: true });
+      const coach = await prisma.coach.findUnique({
+        where: { discordId: interaction.user.id },
+      });
+      if (!coach) {
+        return interaction.editReply('❌ You must set up first with `/setteam`.');
       }
 
-      await prisma.wallet.update({
+      const item = await prisma.item.findUnique({ where: { itemKey } });
+      if (!item || !item.enabled) {
+        return interaction.editReply('❌ Item not found or disabled. Use `/store list` to see available items.');
+      }
+
+      const wallet = await prisma.wallet.upsert({
         where: { coachId: coach.id },
-        data: { balance: { decrement: item.price } },
+        create: { coachId: coach.id, balance: 500 },
+        update: {},
       });
 
+      const cost = (item.price || 0) * qty;
+      if (wallet.balance < cost) {
+        return interaction.editReply(`❌ Not enough DIC$. Cost: ${cost}. Your balance: ${wallet.balance}.`);
+      }
+
+      // Charge
+      await prisma.wallet.update({
+        where: { coachId: coach.id },
+        data: { balance: { decrement: cost } },
+      });
+
+      // Record purchase (qty-based)
       await prisma.purchase.create({
         data: {
           coachId: coach.id,
-          itemId: item.itemKey,
+          itemId: item.id,
+          qty,
           price: item.price,
           note,
         },
       });
 
-      return interaction.reply({ content: `✅ Bought **${item.name}** for ${item.price} DIC$.`, ephemeral: true });
+      return interaction.editReply(`✅ Bought **${item.name}** x${qty} for **${cost} DIC$**.`);
     }
-  }
+
+    // /store refresh (admin)
+    if (sub === 'refresh') {
+      // @ts-ignore simple admin check
+      if (!interaction.memberPermissions?.has('Administrator')) {
+        return interaction.reply({ content: 'Admin only.', ephemeral: true });
+      }
+      await interaction.deferReply({ ephemeral: true });
+      await refreshStoreFromSheet();
+      const count = await prisma.item.count();
+      return interaction.editReply(`✅ Store synced from Google Sheet. Items in DB: **${count}**.`);
+    }
+  },
 } as const;
