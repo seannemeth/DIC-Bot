@@ -1,5 +1,8 @@
+// src/commands/schedule.ts
 import { SlashCommandBuilder, type ChatInputCommandInteraction, EmbedBuilder } from 'discord.js';
 import { getWeekSchedule } from '../lib/schedules';
+// ...rest of the file unchanged
+
 
 export const command = {
   data: new SlashCommandBuilder()
