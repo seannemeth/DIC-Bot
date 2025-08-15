@@ -1,143 +1,144 @@
 // src/commands/powerrankings.ts
-import { SlashCommandBuilder, EmbedBuilder, type ChatInputCommandInteraction } from 'discord.js';
+import {
+  SlashCommandBuilder,
+  type ChatInputCommandInteraction,
+  EmbedBuilder,
+} from 'discord.js';
 import { PrismaClient } from '@prisma/client';
-import { getCurrentSeasonWeek } from '../lib/meta';
 
 const prisma = new PrismaClient();
 
-// --- Elo settings (tweak if you like) ---
-const BASE_ELO = 1500;
-const K = 24;               // update factor
-const HOME_ADV = 40;        // home-advantage points added to home team's Elo in prediction
-// ----------------------------------------
-
-type EloTable = Map<string, number>;
-
-function getElo(table: EloTable, team: string): number {
-  const t = team.trim();
-  if (!table.has(t)) table.set(t, BASE_ELO);
-  return table.get(t)!;
+/** --- Canon helpers (keep in sync with schedule/postscore) --- */
+function sanitizeTeam(raw: string) {
+  return String(raw ?? '').replace(/\s*\([^)]*\)\s*$/, '').replace(/\s+/g, ' ').trim();
 }
-
-function setElo(table: EloTable, team: string, value: number) {
-  table.set(team.trim(), value);
+const TEAM_ALIASES: Record<string, string> = {
+  'pitt': 'pittsburgh',
+  'penn st': 'penn state',
+  'miss state': 'mississippi state',
+  'oklahoma st': 'oklahoma state',
+  'kansas st': 'kansas state',
+  'nc state': 'north carolina state',
+};
+function canonTeam(raw: string) {
+  const s = sanitizeTeam(raw).replace(/\./g, '').toLowerCase();
+  if (TEAM_ALIASES[s]) return TEAM_ALIASES[s];
+  if (s.endsWith(' st')) return s.replace(/ st$/, ' state');
+  return s;
 }
-
-function expectedScore(rA: number, rB: number): number {
-  // standard Elo expected score
-  return 1 / (1 + Math.pow(10, (rB - rA) / 400));
+const DISPLAY_NAME: Record<string, string> = {
+  'pittsburgh': 'Pittsburgh',
+  'penn state': 'Penn State',
+  'mississippi state': 'Mississippi State',
+  'oklahoma state': 'Oklahoma State',
+  'kansas state': 'Kansas State',
+  'north carolina state': 'NC State',
+};
+function pretty(name: string) {
+  const c = canonTeam(name);
+  return DISPLAY_NAME[c] ?? sanitizeTeam(name);
 }
+/** ----------------------------------------------------------- */
 
-function movMultiplier(margin: number, eloDiff: number): number {
-  // Margin-of-victory multiplier (popular Elo variant)
-  // Source idea: 2.2 / ( (eloDiff * 0.001) + 2.2 )
-  return Math.log(Math.max(1, margin + 1)) * (2.2 / ((eloDiff * 0.001) + 2.2));
-}
+type Row = {
+  team: string;
+  gp: number;
+  w: number;
+  l: number;
+  t: number;
+  pf: number;
+  pa: number;
+  diff: number;
+  score: number;
+};
 
 export const command = {
   data: new SlashCommandBuilder()
     .setName('powerrankings')
-    .setDescription('Elo-based power rankings from recorded scores')
-    .addIntegerOption(o =>
-      o.setName('season').setDescription('Season to show (defaults to current)')
-    )
-    .addIntegerOption(o =>
-      o.setName('thru_week').setDescription('Include games up to this week (defaults to current week)')
-    ),
+    .setDescription('Show power rankings for a season')
+    .addIntegerOption(o => o.setName('season').setDescription('Season').setRequired(true))
+    .addIntegerOption(o => o.setName('through_week').setDescription('Include games up to this week (optional)')),
   async execute(interaction: ChatInputCommandInteraction) {
-    const seasonOpt = interaction.options.getInteger('season', false) ?? null;
-    const thruWeekOpt = interaction.options.getInteger('thru_week', false) ?? null;
+    await interaction.deferReply({ ephemeral: true });
 
-    const { season: curSeason, week: curWeek } = await getCurrentSeasonWeek();
-    const season = seasonOpt ?? curSeason;
-    const thruWeek = thruWeekOpt ?? curWeek;
+    const season = interaction.options.getInteger('season', true);
+    const throughWeek = interaction.options.getInteger('through_week') ?? undefined;
 
-    // Pull scored games for the season up to thruWeek (inclusive)
+    // 1) Seed with ALL teams from Coaches so 0–0 teams show up
+    const coaches = await prisma.coach.findMany({ select: { team: true } });
+    const teams = new Map<string, Row>();
+    for (const c of coaches) {
+      const key = canonTeam(c.team);
+      if (!key) continue;
+      if (!teams.has(key)) {
+        teams.set(key, {
+          team: pretty(c.team),
+          gp: 0, w: 0, l: 0, t: 0, pf: 0, pa: 0, diff: 0, score: 0,
+        });
+      }
+    }
+
+    // 2) Overlay played games (confirmed). Include <= week if provided.
     const games = await prisma.game.findMany({
       where: {
         season,
-        week: { lte: thruWeek },
-        AND: [{ homePts: { not: null } }, { awayPts: { not: null } }],
+        status: 'confirmed', // adjust if enum case differs
+        ...(throughWeek ? { week: { lte: throughWeek } } : {}),
       },
-      orderBy: [{ week: 'asc' }, { id: 'asc' }],
+      select: { homeTeam: true, awayTeam: true, homePts: true, awayPts: true },
     });
 
-    if (!games.length) {
-      await interaction.reply({
-        embeds: [
-          new EmbedBuilder()
-            .setTitle(`Season ${season} — Power Rankings`)
-            .setDescription('No scored games found yet.')
-            .setColor(0x95a5a6),
-        ],
-      });
-      return;
+    function ensure(teamName: string) {
+      const key = canonTeam(teamName);
+      if (!teams.has(key)) {
+        teams.set(key, {
+          team: pretty(teamName),
+          gp: 0, w: 0, l: 0, t: 0, pf: 0, pa: 0, diff: 0, score: 0,
+        });
+      }
+      return teams.get(key)!;
     }
 
-    // Build team set from games
-    const teams = new Set<string>();
     for (const g of games) {
-      teams.add(g.homeTeam.trim());
-      teams.add(g.awayTeam.trim());
+      const h = ensure(g.homeTeam);
+      const a = ensure(g.awayTeam);
+      const hs = g.homePts ?? 0;
+      const as = g.awayPts ?? 0;
+
+      h.gp++; a.gp++;
+      h.pf += hs; h.pa += as;
+      a.pf += as; a.pa += hs;
+
+      if (hs > as) { h.w++; a.l++; }
+      else if (hs < as) { a.w++; h.l++; }
+      else { h.t++; a.t++; }
+
+      h.diff = h.pf - h.pa;
+      a.diff = a.pf - a.pa;
     }
 
-    // Initialize Elo table
-    const elo: EloTable = new Map();
-    for (const t of teams) setElo(elo, t, BASE_ELO);
-
-    // Play through games in order
-    for (const g of games) {
-      const home = g.homeTeam.trim();
-      const away = g.awayTeam.trim();
-      const hPts = Number(g.homePts);
-      const aPts = Number(g.awayPts);
-
-      let rH = getElo(elo, home);
-      let rA = getElo(elo, away);
-
-      // Expected with home advantage
-      const expH = expectedScore(rH + HOME_ADV, rA);
-      const expA = 1 - expH;
-
-      // Actual score
-      let sH = 0.5, sA = 0.5;
-      if (hPts > aPts) { sH = 1; sA = 0; }
-      else if (hPts < aPts) { sH = 0; sA = 1; }
-
-      // Margin of victory (absolute)
-      const margin = Math.abs(hPts - aPts);
-      const mult = movMultiplier(margin, Math.abs(rH - rA));
-
-      // Elo updates
-      rH = rH + K * mult * (sH - expH);
-      rA = rA + K * mult * (sA - expA);
-
-      setElo(elo, home, rH);
-      setElo(elo, away, rA);
+    // 3) Scoring model (simple, tweak as needed)
+    for (const r of teams.values()) {
+      r.score = r.w * 3 + r.t * 1 + r.diff * 0.01; // wins heavy, point diff light
     }
 
-    // Sort by Elo
-    const rows = Array.from(elo.entries())
-      .map(([team, rating]) => ({ team, rating }))
-      .sort((a, b) => b.rating - a.rating);
+    // 4) Rank & render
+    const rows = Array.from(teams.values())
+      .sort((a, b) => b.score - a.score || b.diff - a.diff || b.pf - a.pf || a.team.localeCompare(b.team));
 
-    // Prepare display (top 20 or all if <= 20)
-    const top = rows.slice(0, Math.max(20, rows.length));
-    const avg = rows.reduce((acc, r) => acc + r.rating, 0) / rows.length;
-    const lines = top.map((r, i) => {
-      const diff = r.rating - BASE_ELO;
-      const arrow = diff > 0 ? '↑' : (diff < 0 ? '↓' : '→');
-      return `**${i + 1}. ${r.team}** — ${r.rating.toFixed(1)} (${arrow} ${diff >= 0 ? '+' : ''}${diff.toFixed(1)})`;
-    });
+    const list = rows.map((r, i) =>
+      `**${i + 1}. ${r.team}** — ${r.w}-${r.l}${r.t ? '-' + r.t : ''} (PF ${r.pf} / PA ${r.pa} / Diff ${r.diff})`
+    );
 
-    await interaction.reply({
-      embeds: [
-        new EmbedBuilder()
-          .setTitle(`Season ${season} — Power Rankings (thru Week ${thruWeek})`)
-          .setDescription(lines.join('\n'))
-          .setFooter({ text: `Teams: ${rows.length} • Avg Elo: ${avg.toFixed(1)} • K=${K}, HAdv=${HOME_ADV}` })
-          .setColor(0x9b59b6),
-      ],
-    });
+    const title = throughWeek
+      ? `Season ${season} Power Rankings (through Week ${throughWeek})`
+      : `Season ${season} Power Rankings`;
+
+    const embed = new EmbedBuilder()
+      .setTitle(title)
+      .setDescription(list.join('\n'))
+      .setFooter({ text: `Teams ranked: ${rows.length}` });
+
+    await interaction.editReply({ embeds: [embed] });
   },
 } as const;
