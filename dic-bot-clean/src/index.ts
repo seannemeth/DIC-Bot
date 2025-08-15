@@ -59,7 +59,42 @@ const commands = new Collection<string, any>();
   Redeem,
   schedule,
   scheduleImport,
-].forEach((m: any) => commands.set(m.command.data.name, m.command));
+// src/index.ts (only the relevant bits)
+import { Client, Collection, GatewayIntentBits } from "discord.js";
+import { loadCommandsFromDist } from "./commandLoader";
+
+// ... your existing client/login setup ...
+
+// Build the commands collection safely
+const commands = new Collection<string, any>();
+const loaded = loadCommandsFromDist();
+for (const [name, cmd] of loaded.entries()) {
+  commands.set(name, cmd);
+}
+
+// Optionally expose it on client for use elsewhere
+// (client as any).commands = commands;
+
+// When you handle interactions, use the safe map:
+client.on("interactionCreate", async (interaction) => {
+  if (!interaction.isChatInputCommand()) return;
+  const cmd = commands.get(interaction.commandName);
+  if (!cmd) {
+    await interaction.reply({ content: "Command not found.", ephemeral: true }).catch(() => {});
+    return;
+  }
+  try {
+    await cmd.execute(interaction);
+  } catch (err) {
+    console.error(`[cmd:${interaction.commandName}]`, err);
+    if (interaction.deferred || interaction.replied) {
+      await interaction.editReply("❌ Something went wrong.").catch(() => {});
+    } else {
+      await interaction.reply({ content: "❌ Something went wrong.", ephemeral: true }).catch(() => {});
+    }
+  }
+});
+
 
 client.once('ready', async () => {
   console.log(`Logged in as ${client.user?.tag}`);
