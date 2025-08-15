@@ -26,6 +26,7 @@ import * as Redeem from './commands/redeem';
 import { command as schedule } from './commands/schedule';
 import { command as scheduleImport } from './commands/scheduleImport';
 import { command as scoresImport } from './commands/scoresImport';
+import { command as storeSync } from './commands/store_sync';
 
 // === Emoji score listener ===
 import { attachScoreListener } from './ingest/score-listener';
@@ -67,6 +68,7 @@ const modules = [
   { command: schedule },
   { command: scheduleImport },
   { command: scoresImport },
+  { command: storeSync }, 
 ];
 
 for (const m of modules) {
