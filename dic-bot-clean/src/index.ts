@@ -8,7 +8,7 @@ import {
 } from 'discord.js';
 import { PrismaClient } from '@prisma/client';
 
-// === Commands ===
+// === Commands (explicit imports) ===
 import * as Store from './commands/store';
 import * as Inventory from './commands/inventory';
 import * as Lines from './commands/lines';
@@ -40,9 +40,14 @@ const client = new Client({
   ]
 });
 
-// Collect all command modules here
+// Utility to normalize different export styles
+function resolveCommand(mod: any) {
+  return mod?.command ?? mod?.default?.command ?? mod?.default ?? mod;
+}
+
+// Collect all commands safely
 const commands = new Collection<string, any>();
-[
+const modules = [
   SetTeam,
   PostScore,
   Standings,
@@ -57,49 +62,27 @@ const commands = new Collection<string, any>();
   Settle,
   Buy,
   Redeem,
-  schedule,
-  scheduleImport,
-// src/index.ts (only the relevant bits)
-import { Client, Collection, GatewayIntentBits } from "discord.js";
-import { loadCommandsFromDist } from "./commandLoader";
+  // These two are imported directly as { command }
+  { command: schedule },
+  { command: scheduleImport },
+];
 
-// ... your existing client/login setup ...
-
-// Build the commands collection safely
-const commands = new Collection<string, any>();
-const loaded = loadCommandsFromDist();
-for (const [name, cmd] of loaded.entries()) {
-  commands.set(name, cmd);
+for (const m of modules) {
+  const c = resolveCommand(m);
+  if (c?.data?.name && typeof c.execute === 'function') {
+    commands.set(c.data.name, c);
+  } else {
+    const keys = Object.keys(m || {});
+    console.warn(
+      `[commands] Skipping a module — expected { command: { data, execute } }. Got keys: ${keys.join(', ')}`
+    );
+  }
 }
-
-// Optionally expose it on client for use elsewhere
-// (client as any).commands = commands;
-
-// When you handle interactions, use the safe map:
-client.on("interactionCreate", async (interaction) => {
-  if (!interaction.isChatInputCommand()) return;
-  const cmd = commands.get(interaction.commandName);
-  if (!cmd) {
-    await interaction.reply({ content: "Command not found.", ephemeral: true }).catch(() => {});
-    return;
-  }
-  try {
-    await cmd.execute(interaction);
-  } catch (err) {
-    console.error(`[cmd:${interaction.commandName}]`, err);
-    if (interaction.deferred || interaction.replied) {
-      await interaction.editReply("❌ Something went wrong.").catch(() => {});
-    } else {
-      await interaction.reply({ content: "❌ Something went wrong.", ephemeral: true }).catch(() => {});
-    }
-  }
-});
-
 
 client.once('ready', async () => {
   console.log(`Logged in as ${client.user?.tag}`);
 
-  // Diagnose which command is invalid
+  // Diagnose invalid command definitions
   for (const [name, cmd] of commands) {
     try {
       cmd.data.toJSON();
@@ -108,7 +91,7 @@ client.once('ready', async () => {
     }
   }
 
-  // Register slash commands for each guild the bot is in
+  // Register slash commands per guild
   try {
     const body = Array.from(commands.values()).map((c: any) => c.data.toJSON());
     for (const [, guild] of client.guilds.cache) {
@@ -124,7 +107,7 @@ client.once('ready', async () => {
 });
 
 client.on('interactionCreate', async (interaction: Interaction) => {
-  // ✅ Autocomplete support
+  // Autocomplete support
   if (interaction.isAutocomplete()) {
     const cmd = commands.get(interaction.commandName);
     if (cmd?.autocomplete) {
@@ -140,11 +123,15 @@ client.on('interactionCreate', async (interaction: Interaction) => {
   if (!interaction.isChatInputCommand()) return;
 
   const cmd = commands.get(interaction.commandName);
-  if (!cmd) return;
+  if (!cmd) {
+    await interaction.reply({ content: 'Command not found.', ephemeral: true }).catch(() => {});
+    return;
+  }
 
   // Simple admin gate if a command marks itself adminOnly
+  // @ts-ignore
   if (cmd.adminOnly && !('memberPermissions' in interaction && interaction.memberPermissions?.has('Administrator'))) {
-    await interaction.reply({ content: 'Admin only.', ephemeral: true });
+    await interaction.reply({ content: 'Admin only.', ephemeral: true }).catch(() => {});
     return;
   }
 
@@ -168,6 +155,7 @@ if (!token || typeof token !== 'string') {
   throw new Error('DISCORD_TOKEN is missing. Set it in Railway Variables.');
 }
 if (!token.includes('.')) {
-  throw new Error('DISCORD_TOKEN looks wrong (should contain dots). Did you paste the bot token from the Bot tab?');
+  throw new Error('DISCORD_TOKEN looks wrong (should contain dots). Did you paste the bot token from the Bot tab?)');
 }
-client.login(process.env.DISCORD_TOKEN);
+
+client.login(token);
