@@ -1,3 +1,7 @@
+// inside the 'list' branch of src/commands/store.ts
+const lines = items.map((i: any) =>
+  `**${i.itemKey}** — ${i.name} • ${i.price} DIC$\n${i.description ?? ''}`.trim()
+);
 import { SlashCommandBuilder, type ChatInputCommandInteraction } from 'discord.js';
 import { PrismaClient } from '@prisma/client';
 const prisma = new PrismaClient();
