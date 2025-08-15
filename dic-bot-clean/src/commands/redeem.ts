@@ -1,6 +1,6 @@
 // src/commands/redeem.ts
 import { SlashCommandBuilder, type ChatInputCommandInteraction } from 'discord.js';
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, type Purchase } from '@prisma/client';
 const prisma = new PrismaClient();
 
 export const command = {
@@ -63,7 +63,8 @@ export const command = {
       where: { coachId: coach.id, itemId: item.id },
       orderBy: { purchasedAt: 'asc' },
     });
-    const usable = purchases.find((p) => p.consumed < p.qty);
+
+    const usable = purchases.find((p: Purchase) => p.consumed < p.qty);
     if (!usable) return interaction.editReply('❌ You do not have any unused copies of that item.');
 
     // Determine amount from override or item payload
