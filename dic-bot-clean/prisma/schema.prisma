@@ -9,17 +9,26 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+/* ========================
+   League Core
+   ======================== */
+
 model Coach {
-  id         Int      @id @default(autoincrement())
-  discordId  String   @unique
+  id         Int       @id @default(autoincrement())
+  discordId  String    @unique
   handle     String
-  team       String?  @unique
+  team       String?   @unique
   conference String?
-  createdAt  DateTime @default(now())
-  gamesHome  Game[]   @relation("home")
-  gamesAway  Game[]   @relation("away")
+  createdAt  DateTime  @default(now())
+
+  gamesHome  Game[]    @relation("home")
+  gamesAway  Game[]    @relation("away")
+
   wallet     Wallet?
+
+  // Store relations
   purchases  Purchase[]
+  upgrades   Upgrade[]
 }
 
 model Game {
@@ -40,15 +49,17 @@ model Game {
   reportedById  Int?
   confirmedById Int?
   playedAt      DateTime @default(now())
+
   @@index([season, week, status])
 }
 
 model Wallet {
-  id       Int   @id @default(autoincrement())
-  coachId  Int   @unique
-  balance  Int   @default(500)
-  season   Int   @default(1)
-  coach    Coach @relation(fields: [coachId], references: [id])
+  id      Int   @id @default(autoincrement())
+  coachId Int   @unique
+  balance Int   @default(500)
+  season  Int   @default(1)
+
+  coach   Coach @relation(fields: [coachId], references: [id])
 }
 
 model Line {
@@ -63,17 +74,20 @@ model Line {
   awayML    Int?
   cutoff    DateTime?
   createdAt DateTime @default(now())
+
   @@index([season, week, homeTeam, awayTeam])
 }
 
+/* Optional DB representation of bets (we primarily grade via Google Sheet Wagers).
+   Keep here if you want to store/extend bets in DB later. */
 model Bet {
   id        Int      @id @default(autoincrement())
   coachId   Int
   season    Int
   week      Int
   gameId    Int?
-  market    String   // spread|ml|total
-  side      String   // home|away|over|under
+  market    String   // SPREAD|ML|TOTAL
+  side      String   // HOME|AWAY|OVER|UNDER
   line      Float?
   amount    Int
   status    String   @default("open") // open|won|lost|push
@@ -86,23 +100,54 @@ model Meta {
   key   String @id
   value String
 }
+
+/* ========================
+   Store & Upgrades
+   ======================== */
+
+enum ItemType {
+  COINS
+  ATTR
+  TOKEN
+}
+
 model Item {
-  id          String     @id          // e.g. "jersey"
+  id          Int       @id @default(autoincrement())
+  itemKey     String    @unique        // e.g. "ATTR-BOOST-5" or "COINS-1000"
   name        String
-  price       Int
-  description String
-  createdAt   DateTime   @default(now())
+  description String?
+  price       Int                         // DIC$
+  type        ItemType
+  payload     Json?                       // e.g. {"credit":1000} or {"attribute":"SPD","amount":5}
+  enabled     Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+
   purchases   Purchase[]
 }
 
 model Purchase {
   id          Int      @id @default(autoincrement())
   coachId     Int
-  itemId      String
-  price       Int
+  itemId      Int
+  qty         Int      @default(1)
+  consumed    Int      @default(0)        // how many of the qty have been redeemed/used
+  price       Int?                         // snapshot price (optional)
   note        String?
   purchasedAt DateTime @default(now())
 
   coach Coach @relation(fields: [coachId], references: [id])
   item  Item  @relation(fields: [itemId], references: [id])
+}
+
+model Upgrade {
+  id        Int      @id @default(autoincrement())
+  coachId   Int
+  attribute String
+  amount    Int
+  season    Int
+  week      Int?
+  note      String?
+  createdAt DateTime @default(now())
+
+  coach Coach @relation(fields: [coachId], references: [id])
 }
