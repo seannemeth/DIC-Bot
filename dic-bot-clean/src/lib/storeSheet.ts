@@ -1,6 +1,6 @@
 // src/lib/storeSheet.ts
 import { google } from 'googleapis';
-import { PrismaClient, ItemType } from '@prisma/client';
+import { PrismaClient } from '@prisma/client';
 import { getGoogleAuthClient } from './googleAuth';
 
 const TAB = (process.env.STORE_TAB_NAME || 'Store').trim();
@@ -43,12 +43,14 @@ function parseBool(s: string): boolean | undefined {
   return undefined;
 }
 
-// Normalize sheet text -> ItemType enum (default TOKEN)
-function parseType(s: string): ItemType {
+// Local union so we don't need generated enums at compile time
+type ItemTypeLocal = 'COINS' | 'ATTR' | 'TOKEN';
+
+function parseType(s: string): ItemTypeLocal {
   const t = norm(s).toUpperCase();
-  if (t === 'COINS') return ItemType.COINS;
-  if (t === 'ATTR')  return ItemType.ATTR;
-  return ItemType.TOKEN; // default
+  if (t === 'COINS') return 'COINS';
+  if (t === 'ATTR')  return 'ATTR';
+  return 'TOKEN';
 }
 
 export type StoreSyncResult = {
@@ -108,7 +110,7 @@ export async function syncStoreFromSheet(): Promise<StoreSyncResult> {
     if (!itemKey || !name || !Number.isFinite(price)) { skipped++; continue; }
 
     const enabled = parseBool(enabledRaw);
-    const type = parseType(typeRaw); // ItemType enum
+    const type = parseType(typeRaw);
 
     let payload: any = undefined;
     if (payloadRaw) {
@@ -124,7 +126,7 @@ export async function syncStoreFromSheet(): Promise<StoreSyncResult> {
       update: {
         name,
         price: Math.trunc(price),
-        type, // ItemType
+        type: type as unknown as any, // enum field; safe at runtime if values match schema
         description: description || null,
         enabled: enabled ?? true,
         payload,
@@ -133,7 +135,7 @@ export async function syncStoreFromSheet(): Promise<StoreSyncResult> {
         itemKey,
         name,
         price: Math.trunc(price),
-        type, // ItemType
+        type: type as unknown as any,
         description: description || null,
         enabled: enabled ?? true,
         payload,
