@@ -1,3 +1,4 @@
+// src/commands/lines.ts
 import {
   SlashCommandBuilder,
   EmbedBuilder,
