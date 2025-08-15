@@ -1,3 +1,4 @@
+// src/commands/scheduleImport.ts
 import { SlashCommandBuilder, type ChatInputCommandInteraction } from 'discord.js';
 import { google } from 'googleapis';
 import { PrismaClient } from '@prisma/client';
@@ -23,15 +24,19 @@ export const command = {
       const rows = resp.data.values ?? [];
 
       const [header] = rows;
-      const startIdx =
-        header && (header[0] ?? '').toString().toLowerCase().includes('season') ? 1 : 0;
-      const data = rows.slice(startIdx);
+      const looksLikeHeader =
+        Array.isArray(header) &&
+        header.some((cell) => String(cell ?? '').toLowerCase().includes('season'));
+      const data = rows.slice(looksLikeHeader ? 1 : 0);
 
       let upserts = 0, skipped = 0;
 
       for (const r of data) {
-        const [seasonRaw, weekRaw, home, away] =
-          (r ?? []).map((col: unknown) => (col ?? '').toString().trim());
+        const [seasonRaw, weekRaw, homeRaw, awayRaw] =
+          (r ?? []).map((col: unknown) => (col ?? '').toString());
+        const home = homeRaw.trim();
+        const away = awayRaw.trim();
+
         if (!seasonRaw || !weekRaw || !home || !away) { skipped++; continue; }
 
         const season = parseInt(seasonRaw, 10);
@@ -41,7 +46,7 @@ export const command = {
         await prisma.game.upsert({
           where: { season_week_homeTeam_awayTeam: { season, week, homeTeam: home, awayTeam: away } },
           create: { season, week, homeTeam: home, awayTeam: away, status: 'scheduled' },
-          update: {}, // keep as scheduled if already present
+          update: {}, // keep as-is if present
         });
         upserts++;
       }
