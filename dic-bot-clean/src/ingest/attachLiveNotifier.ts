@@ -141,6 +141,7 @@ async function tFetch(path: string, params: Record<string, string | string[]>) {
 
 export async function tickTwitch(client: Client) {
   if (!TW_CLIENT_ID || !TW_CLIENT_SECRET) return;
+
   const subs = await prisma.streamSub.findMany({
     where: { platform: 'twitch' },
     select: {
@@ -152,7 +153,11 @@ export async function tickTwitch(client: Client) {
 
   if (!subs.length) return;
 
-  const logins = subs.map(s => s.channelKey);
+  const castSubs = subs as SubRow[];
+
+  // ✅ typed arrow param
+  const logins = castSubs.map((s: SubRow) => s.channelKey);
+
   const users = (await tFetch('users', { login: logins }))?.data ?? [];
   const idByLogin = new Map<string, string>();
   const displayByLogin = new Map<string, string>();
@@ -167,7 +172,7 @@ export async function tickTwitch(client: Client) {
   const liveByUserId = new Map<string, any>();
   for (const s of streams) liveByUserId.set(String(s.user_id), s);
 
-  for (const sub of subs as SubRow[]) {
+  for (const sub of castSubs) {
     const userId = idByLogin.get(sub.channelKey.toLowerCase());
     if (!userId) continue;
     const live = liveByUserId.get(userId);
@@ -182,7 +187,11 @@ export async function tickTwitch(client: Client) {
         mem.set(key, { isLive: true, last: streamId });
         await prisma.streamSub.update({
           where: { platform_channelKey: { platform: 'twitch', channelKey: sub.channelKey } },
-          data: { isLive: true, lastItemId: streamId, displayName: sub.displayName ?? displayByLogin.get(sub.channelKey.toLowerCase()) ?? undefined },
+          data: {
+            isLive: true,
+            lastItemId: streamId,
+            displayName: sub.displayName ?? displayByLogin.get(sub.channelKey.toLowerCase()) ?? undefined
+          },
         });
 
         const ch = await getChannel(client, sub.discordChannelId ?? undefined);
