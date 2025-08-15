@@ -1,5 +1,3 @@
-// prisma/schema.prisma
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -10,16 +8,19 @@ datasource db {
 }
 
 model Coach {
-  id         Int      @id @default(autoincrement())
-  discordId  String   @unique
+  id         Int       @id @default(autoincrement())
+  discordId  String    @unique
   handle     String
-  team       String?  @unique
+  team       String?   @unique
   conference String?
-  createdAt  DateTime @default(now())
-  gamesHome  Game[]   @relation("home")
-  gamesAway  Game[]   @relation("away")
+  createdAt  DateTime  @default(now())
+
+  gamesHome  Game[]    @relation("home")
+  gamesAway  Game[]    @relation("away")
+
   wallet     Wallet?
   purchases  Purchase[]
+  upgrades   Upgrade[]
 }
 
 model Game {
@@ -34,21 +35,23 @@ model Game {
   awayTeam      String
   homePts       Int?
   awayPts       Int?
-  status        String   @default("pending")
+  status        String   @default("pending") // pending|confirmed|disputed
   messageId     String?
   channelId     String?
   reportedById  Int?
   confirmedById Int?
   playedAt      DateTime @default(now())
+
   @@index([season, week, status])
 }
 
 model Wallet {
-  id       Int   @id @default(autoincrement())
-  coachId  Int   @unique
-  balance  Int   @default(500)
-  season   Int   @default(1)
-  coach    Coach @relation(fields: [coachId], references: [id])
+  id      Int   @id @default(autoincrement())
+  coachId Int   @unique
+  balance Int   @default(500)
+  season  Int   @default(1)
+
+  coach   Coach @relation(fields: [coachId], references: [id])
 }
 
 model Line {
@@ -63,6 +66,7 @@ model Line {
   awayML    Int?
   cutoff    DateTime?
   createdAt DateTime @default(now())
+
   @@index([season, week, homeTeam, awayTeam])
 }
 
@@ -72,35 +76,43 @@ model Bet {
   season    Int
   week      Int
   gameId    Int?
-  market    String
-  side      String
+  market    String   // SPREAD|ML|TOTAL
+  side      String   // HOME|AWAY|OVER|UNDER
   line      Float?
   amount    Int
-  status    String   @default("open")
+  status    String   @default("open") // open|won|lost|push
   placedAt  DateTime @default(now())
   settledAt DateTime?
   payout    Int?
 }
 
-model Meta {
-  key   String @id
-  value String
+enum ItemType {
+  COINS
+  ATTR
+  TOKEN
 }
 
 model Item {
-  id          String     @id
+  id          Int       @id @default(autoincrement())
+  itemKey     String    @unique
   name        String
+  description String?
   price       Int
-  description String
-  createdAt   DateTime   @default(now())
+  type        ItemType
+  payload     Json?
+  enabled     Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+
   purchases   Purchase[]
 }
 
 model Purchase {
   id          Int      @id @default(autoincrement())
   coachId     Int
-  itemId      String
-  price       Int
+  itemId      Int
+  qty         Int      @default(1)
+  consumed    Int      @default(0)
+  price       Int?
   note        String?
   purchasedAt DateTime @default(now())
 
@@ -108,4 +120,15 @@ model Purchase {
   item  Item  @relation(fields: [itemId], references: [id])
 }
 
+model Upgrade {
+  id        Int      @id @default(autoincrement())
+  coachId   Int
+  attribute String
+  amount    Int
+  season    Int
+  week      Int?
+  note      String?
+  createdAt DateTime @default(now())
+
+  coach Coach @relation(fields: [coachId], references: [id])
 }
