@@ -9,6 +9,7 @@ import {
   TextInputBuilder,
   TextInputStyle,
   type Interaction,
+  EmbedBuilder, // ✅ for public announcement
 } from 'discord.js';
 import { PrismaClient } from '@prisma/client';
 import { getWeekSchedule } from '../lib/schedules';
@@ -194,14 +195,37 @@ export async function handlePostScoreModal(interaction: Interaction) {
         homePts: nextHomePts,
         awayPts: nextAwayPts,
         status: 'confirmed' as any, // cast if your schema type is stricter
-        // played: true, // uncomment if you track a played boolean
       },
       select: { homeTeam: true, awayTeam: true, homePts: true, awayPts: true },
     });
 
+    // ✅ Private confirmation to the caller
     await interaction.editReply(
       `✅ Score posted: **${sanitizeTeam(updated.homeTeam)} ${updated.homePts} — ${sanitizeTeam(updated.awayTeam)} ${updated.awayPts}**`
     );
+
+    // ✅ Public announcement
+    // Prefer a dedicated scores channel if provided; otherwise the current channel
+    const SCORES_CHANNEL_ID = process.env.SCORES_CHANNEL_ID;
+    const targetChannel = SCORES_CHANNEL_ID
+      ? await interaction.client.channels.fetch(SCORES_CHANNEL_ID).catch(() => null)
+      : interaction.channel;
+
+    if (targetChannel && 'isTextBased' in targetChannel && targetChannel.isTextBased()) {
+      const embed = new EmbedBuilder()
+        .setTitle(`Final — Season ${season}, Week ${week}`)
+        .setDescription(
+          `**${sanitizeTeam(updated.homeTeam)} ${updated.homePts} — ${sanitizeTeam(updated.awayTeam)} ${updated.awayPts}**`
+        )
+        .setColor(
+          updated.homePts > updated.awayPts ? 0x2ecc71 :
+          updated.homePts < updated.awayPts ? 0xe74c3c :
+          0x95a5a6
+        )
+        .setTimestamp(new Date());
+
+      await (targetChannel as any).send({ embeds: [embed] }).catch(() => {});
+    }
   } catch (err: any) {
     console.error('[postscore modal] failed:', err);
     await interaction.editReply(`❌ Posting score failed: ${err?.message || err}`);
