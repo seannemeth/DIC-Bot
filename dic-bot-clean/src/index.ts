@@ -37,6 +37,7 @@ import * as Settle from './commands/settle';
 import * as Buy from './commands/buy';
 import * as Redeem from './commands/redeem';
 import * as LiveAlerts from './commands/livealerts';
+import * as LiveAlertsDebug from './commands/livealerts_debug';
 import { command as schedule } from './commands/schedule';
 import { command as scheduleImport } from './commands/scheduleImport';
 import { command as scoresImport } from './commands/scoresImport';
@@ -98,6 +99,7 @@ const modules = [
   Buy,
   Redeem,
   LiveAlerts,
+  LiveAlertsDebug,
   { command: schedule },
   { command: scheduleImport },
   { command: scoresImport },
