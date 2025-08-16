@@ -137,18 +137,15 @@ export async function tickTwitch(client: Client) {
   const subs = await prisma.streamSub.findMany({ where: { platform: 'twitch' } });
   dlog('tickTwitch: subs', subs.length);
 
-  // Resolve logins -> ids
-  const logins = subs.map((s: any) => s.channelKey).filter(Boolean);
+    // Resolve logins -> ids
+  const logins: string[] = subs.map((s: any) => s.channelKey).filter(Boolean);
   if (!logins.length) return;
 
   const usersRes = await fetch(
     'https://api.twitch.tv/helix/users?' +
-      new URLSearchParams(logins.map(l => ['login', l])),
+      new URLSearchParams(logins.map((l: string) => ['login', l])),
     { headers: { 'Client-Id': clientId, Authorization: `Bearer ${access}` } }
   );
-  const usersJson = await usersRes.json().catch(() => ({} as any));
-  const byLogin: Record<string, any> = {};
-  for (const u of usersJson?.data ?? []) byLogin[u.login?.toLowerCase() || ''] = u;
 
   // Query streams for those users
   const userIds = Object.values(byLogin).map((u: any) => u.id).filter(Boolean);
