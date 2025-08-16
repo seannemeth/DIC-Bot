@@ -46,6 +46,7 @@ async function postAlert(client: Client, sub: any, embed: EmbedBuilder): Promise
 }
 
 /* ------------------------ YouTube ticker ------------------------ */
+// Stronger YouTube detection: try (A) strict live search, then (B) fallback by latest item
 export async function tickYouTube(client: Client): Promise<void> {
   const key = process.env.YOUTUBE_API_KEY;
   if (!key) return;
@@ -56,19 +57,19 @@ export async function tickYouTube(client: Client): Promise<void> {
   for (const sub of subs) {
     const channelId = sub.channelKey; // UCxxxx
 
-    // Search for current live video
-    const u = new URL('https://www.googleapis.com/youtube/v3/search');
-    u.searchParams.set('part', 'snippet');
-    u.searchParams.set('channelId', channelId);
-    u.searchParams.set('eventType', 'live');
-    u.searchParams.set('type', 'video');
-    u.searchParams.set('maxResults', '1');
-    u.searchParams.set('key', key);
-
     let liveVideoId: string | null = null;
     let title: string | undefined;
 
+    // --- (A) Primary: strict live filter ---
     try {
+      const u = new URL('https://www.googleapis.com/youtube/v3/search');
+      u.searchParams.set('part', 'snippet');
+      u.searchParams.set('channelId', channelId);
+      u.searchParams.set('eventType', 'live');
+      u.searchParams.set('type', 'video');
+      u.searchParams.set('maxResults', '1');
+      u.searchParams.set('key', key);
+
       const res = await fetch(u.toString());
       if (res.ok) {
         const json: any = await res.json();
@@ -76,16 +77,43 @@ export async function tickYouTube(client: Client): Promise<void> {
         liveVideoId = item?.id?.videoId ?? null;
         title = item?.snippet?.title;
       } else {
-        dlog('yt http error', res.status, await res.text().catch(() => ''));
+        dlog('yt http error (strict)', res.status, await res.text().catch(() => ''));
       }
     } catch (e) {
-      dlog('yt fetch error', e);
+      dlog('yt fetch error (strict)', e);
+    }
+
+    // --- (B) Fallback: latest video with liveBroadcastContent === "live" ---
+    if (!liveVideoId) {
+      try {
+        const u2 = new URL('https://www.googleapis.com/youtube/v3/search');
+        u2.searchParams.set('part', 'snippet');
+        u2.searchParams.set('channelId', channelId);
+        u2.searchParams.set('type', 'video');
+        u2.searchParams.set('order', 'date');
+        u2.searchParams.set('maxResults', '1');
+        u2.searchParams.set('key', key);
+
+        const res2 = await fetch(u2.toString());
+        if (res2.ok) {
+          const json2: any = await res2.json();
+          const item2 = json2?.items?.[0];
+          const liveState = item2?.snippet?.liveBroadcastContent; // "live" | "upcoming" | "none"
+          if (liveState === 'live') {
+            liveVideoId = item2?.id?.videoId ?? null;
+            title = item2?.snippet?.title;
+          }
+        } else {
+          dlog('yt http error (fallback)', res2.status, await res2.text().catch(() => ''));
+        }
+      } catch (e) {
+        dlog('yt fetch error (fallback)', e);
+      }
     }
 
     const isNowLive = Boolean(liveVideoId);
 
     if (isNowLive) {
-      // suppress only if we already notified THIS videoId
       const alreadyNotified = sub.isLive && sub.lastItemId === liveVideoId;
       if (!alreadyNotified) {
         const embed = new EmbedBuilder()
@@ -97,7 +125,6 @@ export async function tickYouTube(client: Client): Promise<void> {
         const posted = await postAlert(client, sub, embed);
         dlog('yt post', sub.channelKey, 'posted?', posted, 'videoId', liveVideoId);
       }
-      // mark live
       await prisma.streamSub.update({
         where: { platform_channelKey: { platform: 'youtube', channelKey: sub.channelKey } },
         data: { isLive: true, lastItemId: liveVideoId || undefined },
@@ -115,7 +142,6 @@ export async function tickYouTube(client: Client): Promise<void> {
     }
   }
 }
-
 /* ------------------------ Twitch ticker ------------------------ */
 export async function tickTwitch(client: Client): Promise<void> {
   const clientId = process.env.TWITCH_CLIENT_ID;
