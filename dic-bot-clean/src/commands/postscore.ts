@@ -9,7 +9,7 @@ import {
   TextInputBuilder,
   TextInputStyle,
   type Interaction,
-  EmbedBuilder, // ✅ for public announcement
+  EmbedBuilder,
 } from 'discord.js';
 import { PrismaClient } from '@prisma/client';
 import { getWeekSchedule } from '../lib/schedules';
@@ -194,14 +194,18 @@ export async function handlePostScoreModal(interaction: Interaction) {
       data: {
         homePts: nextHomePts,
         awayPts: nextAwayPts,
-        status: 'confirmed' as any, // cast if your schema type is stricter
+        status: 'confirmed' as any, // cast if your enum is stricter
       },
       select: { homeTeam: true, awayTeam: true, homePts: true, awayPts: true },
     });
 
+    // Coerce to non-null numbers (fallback to what we just set)
+    const h = updated.homePts ?? nextHomePts;
+    const a = updated.awayPts ?? nextAwayPts;
+
     // ✅ Private confirmation to the caller
     await interaction.editReply(
-      `✅ Score posted: **${sanitizeTeam(updated.homeTeam)} ${updated.homePts} — ${sanitizeTeam(updated.awayTeam)} ${updated.awayPts}**`
+      `✅ Score posted: **${sanitizeTeam(updated.homeTeam)} ${h} — ${sanitizeTeam(updated.awayTeam)} ${a}**`
     );
 
     // ✅ Public announcement
@@ -215,11 +219,11 @@ export async function handlePostScoreModal(interaction: Interaction) {
       const embed = new EmbedBuilder()
         .setTitle(`Final — Season ${season}, Week ${week}`)
         .setDescription(
-          `**${sanitizeTeam(updated.homeTeam)} ${updated.homePts} — ${sanitizeTeam(updated.awayTeam)} ${updated.awayPts}**`
+          `**${sanitizeTeam(updated.homeTeam)} ${h} — ${sanitizeTeam(updated.awayTeam)} ${a}**`
         )
         .setColor(
-          updated.homePts > updated.awayPts ? 0x2ecc71 :
-          updated.homePts < updated.awayPts ? 0xe74c3c :
+          h > a ? 0x2ecc71 :
+          h < a ? 0xe74c3c :
           0x95a5a6
         )
         .setTimestamp(new Date());
