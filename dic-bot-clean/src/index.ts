@@ -38,6 +38,7 @@ import * as Buy from './commands/buy';
 import * as Redeem from './commands/redeem';
 import * as LiveAlerts from './commands/livealerts';
 import * as LiveAlertsDebug from './commands/livealerts_debug';
+import { command as livealertsTestpost } from './commands/livealerts_testpost';
 import { command as livealertsTick } from './commands/livealerts_tick';
 import { command as schedule } from './commands/schedule';
 import { command as scheduleImport } from './commands/scheduleImport';
@@ -106,7 +107,8 @@ const modules = [
   { command: scoresImport },
   { command: storeSync },
   { command: setteamBulk },
-    { command: livealertsTick },
+  { command: livealertsTick },
+  { command: livealertsTestpost },
   // { command: livealertsTick }, // <- uncomment if you added /livealerts_tick
 ];
 
