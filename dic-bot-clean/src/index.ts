@@ -39,7 +39,8 @@ import * as Redeem from './commands/redeem';
 import * as LiveAlerts from './commands/livealerts';
 import * as LiveAlertsDebug from './commands/livealerts_debug';
 import { command as livealertsTestpost } from './commands/livealerts_testpost';
-import { command as livealertsTick } from './commands/livealerts_tick';
+import { command as livealertsTick } from './commands/livealerts_tick';import { command as livealertsReset } from './commands/livealerts_reset';
+import { command as livealertsNotify } from './commands/livealerts_notify';
 import { command as schedule } from './commands/schedule';
 import { command as scheduleImport } from './commands/scheduleImport';
 import { command as scoresImport } from './commands/scoresImport';
@@ -109,6 +110,8 @@ const modules = [
   { command: setteamBulk },
   { command: livealertsTick },
   { command: livealertsTestpost },
+  { command: livealertsReset },
+  { command: livealertsNotify },
   // { command: livealertsTick }, // <- uncomment if you added /livealerts_tick
 ];
 
