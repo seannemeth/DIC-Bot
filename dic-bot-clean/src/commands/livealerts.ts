@@ -307,3 +307,20 @@ export const command = {
     await interaction.editReply('Unknown subcommand.');
   },
 } as const;
+
+// inside the builder
+.addSubcommand(sc => sc
+  .setName('debug')
+  .setDescription('Show stored state for a subscription (admin)')
+  .addStringOption(o => o.setName('platform').setDescription('youtube or twitch').setRequired(true)
+    .addChoices({ name: 'youtube', value: 'youtube' }, { name: 'twitch', value: 'twitch' }))
+  .addStringOption(o => o.setName('id').setDescription('Channel ID (YT UC…) or twitch login').setRequired(true))
+)
+.addSubcommand(sc => sc
+  .setName('reset')
+  .setDescription('Reset live state for a subscription (admin)')
+  .addStringOption(o => o.setName('platform').setDescription('youtube or twitch').setRequired(true)
+    .addChoices({ name: 'youtube', value: 'youtube' }, { name: 'twitch', value: 'twitch' }))
+  .addStringOption(o => o.setName('id').setDescription('Channel ID (YT UC…) or twitch login').setRequired(true))
+)
+
