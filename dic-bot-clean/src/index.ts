@@ -14,7 +14,7 @@ import * as Inventory from './commands/inventory';
 import * as Lines from './commands/lines';
 import * as PlaceBet from './commands/placebet';
 import * as SetTeam from './commands/setteam';
-import * as PostScore from './commands/postscore'; // <-- includes command + UI handlers
+import * as PostScore from './commands/postscore'; // includes /postscore + UI handlers
 import * as Standings from './commands/standings';
 import * as Leaderboard from './commands/leaderboard';
 import * as Balance from './commands/balance';
@@ -29,9 +29,12 @@ import { command as scheduleImport } from './commands/scheduleImport';
 import { command as scoresImport } from './commands/scoresImport';
 import { command as storeSync } from './commands/store_sync';
 import { command as setteamBulk } from './commands/setteam_bulk';
+// (optional) on-demand poll command if you added it:
+// import { command as livealertsTick } from './commands/livealerts_tick';
 
-// === Emoji score listener ===
+// === Ingest / listeners ===
 import { attachScoreListener } from './ingest/score-listener';
+import { attachLiveNotifier } from './ingest/attachLiveNotifier';
 
 const prisma = new PrismaClient();
 
@@ -39,12 +42,12 @@ const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
-    // Keep this ON only if you enabled "Message Content Intent" in the Dev Portal
+    // Keep ON only if you enabled "Message Content Intent" in the Dev Portal
     GatewayIntentBits.MessageContent,
   ],
 });
 
-// Utility to normalize different export styles
+// Normalize different module export styles
 function resolveCommand(mod: any) {
   return mod?.command ?? mod?.default?.command ?? mod?.default ?? mod;
 }
@@ -53,7 +56,7 @@ function resolveCommand(mod: any) {
 const commands = new Collection<string, any>();
 const modules = [
   SetTeam,
-  PostScore,         // <-- contains { command } export
+  PostScore,        // contains { command }
   Standings,
   Leaderboard,
   Balance,
@@ -67,12 +70,12 @@ const modules = [
   Buy,
   Redeem,
   LiveAlerts,
-  // These are imported as { command }
   { command: schedule },
   { command: scheduleImport },
   { command: scoresImport },
   { command: storeSync },
   { command: setteamBulk },
+  // { command: livealertsTick }, // <- uncomment if you added /livealerts_tick
 ];
 
 for (const m of modules) {
@@ -87,7 +90,7 @@ for (const m of modules) {
   }
 }
 
-// ---- helpers to fix option order and debug offending commands ----
+// ---- helpers to fix option order and debug invalid slash definitions ----
 type CmdJSON = {
   name: string;
   description?: string;
@@ -160,13 +163,16 @@ client.once('ready', async () => {
     console.error('[SLASH] Registration error:', e);
   }
 
-  // Attach emoji-based score listener (needs SCORES_CHANNEL_ID + Message Content Intent)
+  // Emoji-based score listener (needs SCORES_CHANNEL_ID + Message Content Intent)
   attachScoreListener(client, prisma);
+
+  // ✅ Start YouTube/Twitch live polling (needs YOUTUBE_API_KEY and/or TWITCH_CLIENT_ID/_SECRET)
+  attachLiveNotifier(client);
 });
 
 client.on('interactionCreate', async (interaction: Interaction) => {
   try {
-    // ---- Route /postscore UI (select -> modal, modal -> DB) before other handlers ----
+    // ---- Route /postscore UI first (select -> modal, modal -> DB) ----
     if (interaction.isStringSelectMenu() && interaction.customId === 'postscore_select') {
       if (typeof (PostScore as any).handlePostScoreSelect === 'function') {
         await (PostScore as any).handlePostScoreSelect(interaction);
