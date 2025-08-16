@@ -5,8 +5,21 @@ import {
   GatewayIntentBits,
   Collection,
   Interaction,
+  MessageFlags, // ✅ use flags instead of { ephemeral: true }
 } from 'discord.js';
 import { PrismaClient } from '@prisma/client';
+
+// (Optional) minimal health server if your host expects a listening port (Railway "Web" service, etc.)
+import http from 'http';
+const PORT = Number(process.env.PORT || 0);
+if (PORT) {
+  http
+    .createServer((_, res) => {
+      res.writeHead(200, { 'Content-Type': 'text/plain' });
+      res.end('ok');
+    })
+    .listen(PORT, () => console.log('[health] listening on', PORT));
+}
 
 // === Commands (explicit imports) ===
 import * as Store from './commands/store';
@@ -47,6 +60,21 @@ const client = new Client({
   ],
 });
 
+// Extra diagnostics
+client.on('error', (e) => console.error('[discord error]', e));
+client.on('shardError', (e) => console.error('[shard error]', e));
+// @ts-ignore - rest exists on the client in v14+
+(client as any).rest?.on?.('rateLimited', (info: any) => console.warn('[rate limit]', info));
+
+process.on('unhandledRejection', (r) => console.error('[unhandledRejection]', r));
+process.on('uncaughtException', (e) => console.error('[uncaughtException]', e));
+['SIGTERM', 'SIGINT'].forEach((sig) =>
+  process.on(sig as NodeJS.Signals, () => {
+    console.warn(`[signal] ${sig} received; shutting down…`);
+    setTimeout(() => process.exit(0), 1500);
+  })
+);
+
 // Normalize different module export styles
 function resolveCommand(mod: any) {
   return mod?.command ?? mod?.default?.command ?? mod?.default ?? mod;
@@ -56,7 +84,7 @@ function resolveCommand(mod: any) {
 const commands = new Collection<string, any>();
 const modules = [
   SetTeam,
-  PostScore,        // contains { command }
+  PostScore, // contains { command }
   Standings,
   Leaderboard,
   Balance,
@@ -100,8 +128,8 @@ type CmdJSON = {
 
 function sortOptionsRequiredFirst(options?: any[]): any[] | undefined {
   if (!Array.isArray(options)) return options;
-  const req = options.filter(o => o?.required === true);
-  const opt = options.filter(o => o?.required !== true);
+  const req = options.filter((o) => o?.required === true);
+  const opt = options.filter((o) => o?.required !== true);
   return [...req, ...opt];
 }
 
@@ -119,7 +147,11 @@ function summarizeOptions(node: any, prefix = ''): string[] {
   const lines: string[] = [];
   const opts: any[] = Array.isArray(node?.options) ? node.options : [];
   if (opts.length) {
-    lines.push(`${prefix}options (${opts.length}): ${opts.map(o => `${o.name}${o.required ? '*' : ''}`).join(', ')}`);
+    lines.push(
+      `${prefix}options (${opts.length}): ${opts
+        .map((o) => `${o.name}${o.required ? '*' : ''}`)
+        .join(', ')}`
+    );
     for (const child of opts) {
       // 1 = SUB_COMMAND, 2 = SUB_COMMAND_GROUP
       if (child?.type === 1 || child?.type === 2) {
@@ -152,7 +184,7 @@ client.once('ready', async () => {
     console.log('[SLASH] Command ordering preview:');
     fixedBodies.forEach((b, i) => {
       console.log(`  ${i}. /${b.name}`);
-      summarizeOptions(b).forEach(line => console.log('     ' + line));
+      summarizeOptions(b).forEach((line) => console.log('     ' + line));
     });
 
     for (const [, guild] of client.guilds.cache) {
@@ -204,14 +236,18 @@ client.on('interactionCreate', async (interaction: Interaction) => {
 
     const cmd = commands.get(interaction.commandName);
     if (!cmd) {
-      await interaction.reply({ content: 'Command not found.', ephemeral: true }).catch(() => {});
+      await interaction
+        .reply({ content: 'Command not found.', flags: MessageFlags.Ephemeral })
+        .catch(() => {});
       return;
     }
 
     // Simple admin gate if a command marks itself adminOnly
     // @ts-ignore
     if (cmd.adminOnly && !('memberPermissions' in interaction && interaction.memberPermissions?.has('Administrator'))) {
-      await interaction.reply({ content: 'Admin only.', ephemeral: true }).catch(() => {});
+      await interaction
+        .reply({ content: 'Admin only.', flags: MessageFlags.Ephemeral })
+        .catch(() => {});
       return;
     }
 
@@ -222,9 +258,9 @@ client.on('interactionCreate', async (interaction: Interaction) => {
       if ('isRepliable' in interaction && interaction.isRepliable()) {
         // @ts-ignore
         if ((interaction as any).replied || (interaction as any).deferred) {
-          await interaction.followUp({ content: 'Command error.', ephemeral: true });
+          await interaction.followUp({ content: 'Command error.', flags: MessageFlags.Ephemeral });
         } else {
-          await interaction.reply({ content: 'Command error.', ephemeral: true });
+          await interaction.reply({ content: 'Command error.', flags: MessageFlags.Ephemeral });
         }
       }
     } catch {}
