@@ -8,73 +8,46 @@ const PERIOD_MS = Number(process.env.LIVE_ALERT_PERIOD_MS || 60_000);
 const DEBUG_LIVE = process.env.LIVE_ALERT_DEBUG === '1';
 const dlog = (...a: unknown[]) => { if (DEBUG_LIVE) console.log('[live]', ...a); };
 
-// Resolve the channel to post in (priority):
-// 1) subscription.discordChannelId
-// 2) server default from LiveAlertDefault by sub.guildId
-// 3) env LIVE_ALERT_CHANNEL_ID (global fallback)
-async function resolveTargetChannelId(sub: {
-  discordChannelId: string | null;
-  guildId: string | null;
-}): Promise<string | null> {
-  if (sub.discordChannelId) return sub.discordChannelId;
-
-  if (sub.guildId) {
-    try {
-      const row = await prisma.liveAlertDefault.findUnique({
-        where: { guildId: sub.guildId },
-      });
-      if (row?.channelId) return row.channelId;
-    } catch { /* ignore */ }
-  }
-
-  return process.env.LIVE_ALERT_CHANNEL_ID ?? null;
+// ------------ helpers ------------
+async function fetchJson(url: string, init?: RequestInit) {
+  const res = await fetch(url, init);
+  const text = await res.text();
+  let json: any;
+  try { json = JSON.parse(text); } catch { json = text; }
+  return { ok: res.ok, status: res.status, json };
 }
 
-// Helper to post in the right channel
 async function postAlert(client: Client, sub: any, embed: EmbedBuilder): Promise<boolean> {
-  const channelId = await resolveTargetChannelId({ discordChannelId: sub.discordChannelId, guildId: sub.guildId ?? null });
-  dlog('[post] resolved channel', { channelId, platform: sub.platform, channelKey: sub.channelKey });
+  // priority: per-sub channel -> per-guild default -> env fallback
+  let channelId: string | null = sub.discordChannelId || null;
 
-  if (!channelId) {
-    console.warn('[live] no target channel for', sub.platform, sub.channelKey);
-    return false;
+  if (!channelId && sub.guildId) {
+    try {
+      const row = await prisma.liveAlertDefault.findUnique({ where: { guildId: sub.guildId } });
+      if (row?.channelId) channelId = row.channelId;
+    } catch {}
   }
 
-  const ch = await client.channels.fetch(channelId).catch((e: any) => {
-    console.warn('[live] fetch channel failed', channelId, e?.message || e);
-    return null;
-  });
-  if (!ch || !('isTextBased' in ch) || !ch.isTextBased()) {
-    console.warn('[live] channel not text-based or inaccessible', channelId);
-    return false;
-  }
-  try {
-    await (ch as any).send({ embeds: [embed] });
-    return true;
-  } catch (e: any) {
-    console.warn('[live] send failed', channelId, e?.message || e);
-    return false;
-  }
+  if (!channelId) channelId = process.env.LIVE_ALERT_CHANNEL_ID ?? null;
+
+  dlog('postAlert resolve', { platform: sub.platform, key: sub.channelKey, channelId });
+
+  if (!channelId) return false;
+  const ch = await client.channels.fetch(channelId).catch(() => null);
+  if (!ch || !('isTextBased' in ch) || !ch.isTextBased()) return false;
+  await (ch as any).send({ embeds: [embed] }).catch(() => {});
+  return true;
 }
 
-/* ------------------------ YouTube helpers ------------------------ */
-// Fallback C: use /channel/<UCID>/live redirect to watch?v=VIDEO_ID if truly live & public
-async function resolveLiveVideoByRedirect(channelId: string): Promise<string | null> {
-  const url = `https://www.youtube.com/channel/${channelId}/live`;
-  try {
-    const res = await fetch(url, { redirect: 'manual' as any });
-    const loc = res.headers.get('location') || '';
-    // Expect something like /watch?v=VIDEO_ID or a full https URL
-    const match = loc.match(/[?&]v=([0-9A-Za-z_-]{6,})/);
-    return match ? match[1] : null;
-  } catch {
-    return null;
-  }
-}
-
-/* ------------------------ YouTube ticker ------------------------ */
-// Stronger YouTube detection: (A) strict live search, (B) latest-item fallback, (C) /live redirect
-export async function tickYouTube(client: Client): Promise<void> {
+// ------------ YouTube ------------
+/**
+ * Robust live detection strategy:
+ * 1) Try strict: search?eventType=live&type=video
+ * 2) If none, fetch latest 5 videos, then call videos?part=snippet,liveStreamingDetails
+ *    and detect live by either snippet.liveBroadcastContent === 'live' OR
+ *    liveStreamingDetails.actualStartTime being present.
+ */
+export async function tickYouTube(client: Client) {
   const key = process.env.YOUTUBE_API_KEY;
   if (!key) return;
 
@@ -82,12 +55,12 @@ export async function tickYouTube(client: Client): Promise<void> {
   dlog('tickYouTube: subs', subs.length);
 
   for (const sub of subs) {
-    const channelId = sub.channelKey; // UCxxxx
+    const channelId = sub.channelKey as string;
 
     let liveVideoId: string | null = null;
     let title: string | undefined;
 
-    // --- (A) Primary: strict live filter ---
+    // (A) strict live
     try {
       const u = new URL('https://www.googleapis.com/youtube/v3/search');
       u.searchParams.set('part', 'snippet');
@@ -96,21 +69,19 @@ export async function tickYouTube(client: Client): Promise<void> {
       u.searchParams.set('type', 'video');
       u.searchParams.set('maxResults', '1');
       u.searchParams.set('key', key);
-
-      const res = await fetch(u.toString());
-      if (res.ok) {
-        const json: any = await res.json();
-        const item = json?.items?.[0];
+      const r = await fetchJson(u.toString());
+      if (r.ok) {
+        const item = r.json?.items?.[0];
         liveVideoId = item?.id?.videoId ?? null;
         title = item?.snippet?.title;
       } else {
-        dlog('yt http error (strict)', res.status, await res.text().catch(() => ''));
+        dlog('yt strict err', r.status, r.json);
       }
     } catch (e) {
-      dlog('yt fetch error (strict)', e);
+      dlog('yt strict fetch error', e);
     }
 
-    // --- (B) Fallback: latest video with liveBroadcastContent === "live" ---
+    // (B) latest N -> videos details
     if (!liveVideoId) {
       try {
         const u2 = new URL('https://www.googleapis.com/youtube/v3/search');
@@ -118,47 +89,44 @@ export async function tickYouTube(client: Client): Promise<void> {
         u2.searchParams.set('channelId', channelId);
         u2.searchParams.set('type', 'video');
         u2.searchParams.set('order', 'date');
-        u2.searchParams.set('maxResults', '1');
+        u2.searchParams.set('maxResults', '5'); // check a few in case uploads are noisy
         u2.searchParams.set('key', key);
+        const r2 = await fetchJson(u2.toString());
+        if (r2.ok && Array.isArray(r2.json?.items) && r2.json.items.length) {
+          const ids: string[] = r2.json.items
+            .map((it: any) => it?.id?.videoId)
+            .filter(Boolean);
 
-        const res2 = await fetch(u2.toString());
-        if (res2.ok) {
-          const json2: any = await res2.json();
-          const item2 = json2?.items?.[0];
-          const liveState = item2?.snippet?.liveBroadcastContent; // "live" | "upcoming" | "none"
-          if (liveState === 'live') {
-            liveVideoId = item2?.id?.videoId ?? null;
-            title = item2?.snippet?.title;
+          if (ids.length) {
+            const u3 = new URL('https://www.googleapis.com/youtube/v3/videos');
+            u3.searchParams.set('part', 'snippet,liveStreamingDetails');
+            u3.searchParams.set('id', ids.join(','));
+            u3.searchParams.set('key', key);
+            const r3 = await fetchJson(u3.toString());
+            if (r3.ok) {
+              for (const v of r3.json?.items ?? []) {
+                const liveFlag = v?.snippet?.liveBroadcastContent === 'live';
+                const started = Boolean(v?.liveStreamingDetails?.actualStartTime);
+                if (liveFlag || started) {
+                  liveVideoId = v.id;
+                  title = v?.snippet?.title;
+                  break;
+                }
+              }
+            } else {
+              dlog('yt videos err', r3.status, r3.json);
+            }
           }
         } else {
-          dlog('yt http error (fallback)', res2.status, await res2.text().catch(() => ''));
+          dlog('yt latest err', r2.status, r2.json);
         }
       } catch (e) {
-        dlog('yt fetch error (fallback)', e);
-      }
-    }
-
-    // --- (C) Final fallback: /live redirect probe ---
-    if (!liveVideoId) {
-      const viaRedirect = await resolveLiveVideoByRedirect(channelId);
-      if (viaRedirect) {
-        liveVideoId = viaRedirect;
-        // Title unknown here unless we do an extra videos.list call (more quota); optional:
-        // title = undefined;
+        dlog('yt fallback fetch error', e);
       }
     }
 
     const isNowLive = Boolean(liveVideoId);
-
-    // 🔊 Per-channel debug line
-    dlog('[yt]', sub.channelKey, {
-      display: sub.displayName,
-      isNowLive,
-      liveVideoId,
-      title,
-      lastItemId: sub.lastItemId,
-      wasLive: sub.isLive,
-    });
+    dlog('yt verdict', { key: channelId, isNowLive, liveVideoId, prev: { isLive: sub.isLive, last: sub.lastItemId } });
 
     if (isNowLive) {
       const alreadyNotified = sub.isLive && sub.lastItemId === liveVideoId;
@@ -170,28 +138,25 @@ export async function tickYouTube(client: Client): Promise<void> {
           .setColor(0xff0000)
           .setTimestamp(new Date());
         const posted = await postAlert(client, sub, embed);
-        dlog('[yt-post]', sub.channelKey, { posted, liveVideoId });
+        dlog('yt post', channelId, { posted, liveVideoId });
       }
       await prisma.streamSub.update({
-        where: { platform_channelKey: { platform: 'youtube', channelKey: sub.channelKey } },
+        where: { platform_channelKey: { platform: 'youtube', channelKey: channelId } },
         data: { isLive: true, lastItemId: liveVideoId || undefined },
       }).catch(() => {});
-      continue;
-    }
-
-    // not live → reset so next go-live notifies again
-    if (sub.isLive || sub.lastItemId) {
-      dlog('[yt-reset]', sub.channelKey, { wasLive: sub.isLive, lastItemId: sub.lastItemId });
+    } else if (sub.isLive || sub.lastItemId) {
+      // reset so next go-live notifies again
       await prisma.streamSub.update({
-        where: { platform_channelKey: { platform: 'youtube', channelKey: sub.channelKey } },
+        where: { platform_channelKey: { platform: 'youtube', channelKey: channelId } },
         data: { isLive: false, lastItemId: null },
       }).catch(() => {});
+      dlog('yt reset', channelId);
     }
   }
 }
 
-/* ------------------------ Twitch ticker ------------------------ */
-export async function tickTwitch(client: Client): Promise<void> {
+// ------------ Twitch ------------
+export async function tickTwitch(client: Client) {
   const clientId = process.env.TWITCH_CLIENT_ID;
   const clientSecret = process.env.TWITCH_CLIENT_SECRET;
   if (!clientId || !clientSecret) return;
@@ -207,72 +172,51 @@ export async function tickTwitch(client: Client): Promise<void> {
         grant_type: 'client_credentials',
       }),
     });
-    const json: any = await res.json();
+    const json = await res.json();
     if (!res.ok) throw new Error(JSON.stringify(json));
     access = json.access_token as string;
   } catch (e) {
-    dlog('twitch token error', e);
+    dlog('tw token error', e);
     return;
   }
 
   const subs = await prisma.streamSub.findMany({ where: { platform: 'twitch' } });
   dlog('tickTwitch: subs', subs.length);
 
-  // Resolve logins -> ids
-  const logins: string[] = subs.map((s: any) => s.channelKey).filter(Boolean);
+  const logins = subs.map(s => String(s.channelKey || '')).filter(Boolean);
   if (!logins.length) return;
 
-  const usersRes = await fetch(
-    'https://api.twitch.tv/helix/users?' +
-      new URLSearchParams(logins.map((l: string) => ['login', l])),
+  const ur = await fetch(
+    'https://api.twitch.tv/helix/users?' + new URLSearchParams(logins.map(l => ['login', l])),
     { headers: { 'Client-Id': clientId, Authorization: `Bearer ${access}` } }
   );
-  const usersJson: any = await usersRes.json().catch(() => ({} as any));
-
-  // Build login -> user map
+  const uj = await ur.json().catch(() => ({} as any));
   const byLogin: Record<string, any> = {};
-  for (const u of usersJson?.data ?? []) {
-    const login = (u.login ?? '').toLowerCase();
-    if (login) byLogin[login] = u;
-  }
+  for (const u of uj?.data ?? []) byLogin[String(u.login || '').toLowerCase()] = u;
 
-  // Query streams for those users (user_id list)
-  const userIds: string[] = Object.values(byLogin).map((u: any) => String(u.id)).filter(Boolean);
+  const userIds = Object.values(byLogin).map((u: any) => String(u.id));
   if (userIds.length) {
-    const streamsRes = await fetch(
-      'https://api.twitch.tv/helix/streams?' +
-        new URLSearchParams(userIds.map((id: string) => ['user_id', id])),
+    const sr = await fetch(
+      'https://api.twitch.tv/helix/streams?' + new URLSearchParams(userIds.map(id => ['user_id', id])),
       { headers: { 'Client-Id': clientId, Authorization: `Bearer ${access}` } }
     );
-    const streamsJson: any = await streamsRes.json().catch(() => ({} as any));
+    const sj = await sr.json().catch(() => ({} as any));
 
     const liveByUserId: Record<string, any> = {};
-    for (const s of streamsJson?.data ?? []) {
-      if (s?.user_id) liveByUserId[String(s.user_id)] = s;
-    }
+    for (const s of sj?.data ?? []) liveByUserId[String(s.user_id)] = s;
 
     for (const sub of subs) {
-      const login = (sub.channelKey ?? '').toLowerCase();
+      const login = String(sub.channelKey || '').toLowerCase();
       const user = byLogin[login];
       if (!user) continue;
 
       const live = liveByUserId[String(user.id)] || null;
-
-      // 🔊 Per-channel debug line
-      dlog('[tw]', sub.channelKey, {
-        display: sub.displayName,
-        isNowLive: Boolean(live),
-        streamId: live ? String(live.id) : null,
-        title: live?.title,
-        lastItemId: sub.lastItemId,
-        wasLive: sub.isLive,
-      });
+      const isNowLive = Boolean(live);
+      dlog('tw verdict', { login, isNowLive, streamId: live ? String(live.id) : null, prev: { isLive: sub.isLive, last: sub.lastItemId } });
 
       if (live) {
-        // Use stream id as unique live session id
-        const streamId: string = String(live.id);
-        const title: string | undefined = live.title;
-
+        const streamId = String(live.id);
+        const title = live.title as string | undefined;
         const alreadyNotified = sub.isLive && sub.lastItemId === streamId;
 
         if (!alreadyNotified) {
@@ -283,29 +227,26 @@ export async function tickTwitch(client: Client): Promise<void> {
             .setColor(0x9146ff)
             .setTimestamp(new Date());
           const posted = await postAlert(client, sub, embed);
-          dlog('[tw-post]', sub.channelKey, { posted, streamId });
+          dlog('tw post', login, { posted, streamId });
         }
 
         await prisma.streamSub.update({
           where: { platform_channelKey: { platform: 'twitch', channelKey: sub.channelKey } },
           data: { isLive: true, lastItemId: streamId },
         }).catch(() => {});
-      } else {
-        // not live → reset
-        if (sub.isLive || sub.lastItemId) {
-          dlog('[tw-reset]', sub.channelKey, { wasLive: sub.isLive, lastItemId: sub.lastItemId });
-          await prisma.streamSub.update({
-            where: { platform_channelKey: { platform: 'twitch', channelKey: sub.channelKey } },
-            data: { isLive: false, lastItemId: null },
-          }).catch(() => {});
-        }
+      } else if (sub.isLive || sub.lastItemId) {
+        await prisma.streamSub.update({
+          where: { platform_channelKey: { platform: 'twitch', channelKey: sub.channelKey } },
+          data: { isLive: false, lastItemId: null },
+        }).catch(() => {});
+        dlog('tw reset', login);
       }
     }
   }
 }
 
-/* ------------------------ Attacher ------------------------ */
-export function attachLiveNotifier(client: Client): Promise<void> {
+// ------------ Attacher ------------
+export function attachLiveNotifier(client: Client) {
   const run = async () => {
     try {
       await Promise.allSettled([tickYouTube(client), tickTwitch(client)]);
@@ -313,9 +254,7 @@ export function attachLiveNotifier(client: Client): Promise<void> {
       console.error('[live] tick error', e);
     }
   };
-  // initial + interval
-  run();
+  run(); // initial tick
   setInterval(run, PERIOD_MS);
   console.log('[live] notifier attached. period=', PERIOD_MS, 'ms');
-  return Promise.resolve();
 }
