@@ -72,9 +72,7 @@ export const command = {
         ),
     )
     // /livealerts list
-    .addSubcommand(sc =>
-      sc.setName('list').setDescription('List your subscriptions'),
-    )
+    .addSubcommand(sc => sc.setName('list').setDescription('List your subscriptions'))
     // /livealerts debug (admin)
     .addSubcommand(sc =>
       sc
@@ -118,10 +116,44 @@ export const command = {
             .setDescription('Channel ID (YT UC…) or Twitch login')
             .setRequired(true),
         ),
+    )
+    // /livealerts set-default-channel (admin)
+    .addSubcommand(sc =>
+      sc
+        .setName('set-default-channel')
+        .setDescription('Set this server’s default live alert channel (admin)')
+        .addChannelOption(o =>
+          o
+            .setName('channel')
+            .setDescription('Channel used when a subscription has no channel set')
+            .setRequired(true),
+        ),
     ),
 
   async execute(interaction: ChatInputCommandInteraction) {
     const sub = interaction.options.getSubcommand(true);
+
+    if (sub === 'set-default-channel') {
+      if (!isAdmin(interaction)) {
+        await interaction.reply({ content: '❌ Admin only.', flags: MessageFlags.Ephemeral });
+        return;
+      }
+      if (!interaction.guildId) {
+        await interaction.reply({ content: 'This command must be used in a server.', flags: MessageFlags.Ephemeral });
+        return;
+      }
+      const ch = interaction.options.getChannel('channel', true);
+      await prisma.liveAlertDefault.upsert({
+        where: { guildId: interaction.guildId },
+        update: { channelId: ch.id },
+        create: { guildId: interaction.guildId, channelId: ch.id },
+      });
+      await interaction.reply({
+        content: `✅ Default alert channel set to <#${ch.id}> for this server.`,
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
 
     if (sub === 'add') {
       const platform = interaction.options.getString('platform', true) as 'youtube' | 'twitch';
@@ -130,30 +162,35 @@ export const command = {
       const ch = interaction.options.getChannel('channel');
       const discordChannelId = ch?.id ?? null;
 
-      // ownerDiscordId is REQUIRED by your Prisma model
       const ownerDiscordId = interaction.user.id;
+      const guildId = interaction.guildId ?? null;
 
       await prisma.streamSub.upsert({
         where: { platform_channelKey: { platform, channelKey: key } },
         update: {
-          ownerDiscordId,                 // keep the latest owner if they re-add
+          ownerDiscordId,
           displayName: display,
-          discordChannelId,               // can be null (use default channel)
+          discordChannelId,
+          guildId, // ✅ keep where it was created
         },
         create: {
           platform,
           channelKey: key,
           ownerDiscordId,
           displayName: display,
-          discordChannelId,               // can be null
+          discordChannelId,
+          guildId, // ✅
           isLive: false,
           lastItemId: null,
         },
       });
 
       await interaction.reply({
-        content: `✅ Subscribed **${display ?? key}** on **${platform}**` +
-          (discordChannelId ? ` (→ <#${discordChannelId}>)` : ' (using default alerts channel)'),
+        content:
+          `✅ Subscribed **${display ?? key}** on **${platform}** ` +
+          (discordChannelId
+            ? `→ alerts in <#${discordChannelId}>`
+            : `→ will use this server’s default (set via /livealerts set-default-channel)`),
         flags: MessageFlags.Ephemeral,
       });
       return;
@@ -163,7 +200,6 @@ export const command = {
       const platform = interaction.options.getString('platform', true) as 'youtube' | 'twitch';
       const key = interaction.options.getString('id', true).trim();
 
-      // Only the owner or an admin can remove
       const row = await prisma.streamSub.findUnique({
         where: { platform_channelKey: { platform, channelKey: key } },
       });
@@ -180,10 +216,7 @@ export const command = {
         where: { platform_channelKey: { platform, channelKey: key } },
       });
 
-      await interaction.reply({
-        content: `🗑️ Removed **${platform}:${key}**`,
-        flags: MessageFlags.Ephemeral,
-      });
+      await interaction.reply({ content: `🗑️ Removed **${platform}:${key}**`, flags: MessageFlags.Ephemeral });
       return;
     }
 
@@ -201,14 +234,20 @@ export const command = {
         return;
       }
 
-      const lines = mine.map(m =>
-        `• **${m.platform}** — ${m.displayName ?? m.channelKey} ${m.discordChannelId ? `(→ <#${m.discordChannelId}>)` : '(default channel)'} ` +
-        `| isLive=${m.isLive} | lastItemId=${m.lastItemId ?? 'null'}`,
-      );
-      await interaction.reply({
-        content: lines.join('\n'),
-        flags: MessageFlags.Ephemeral,
-      });
+      // Try to show effective target channel for each
+      const lines: string[] = [];
+      for (const m of mine) {
+        let target = m.discordChannelId ? `<#${m.discordChannelId}>` : '(default)';
+        if (!m.discordChannelId && m.guildId) {
+          const def = await prisma.liveAlertDefault.findUnique({ where: { guildId: m.guildId } });
+          if (def?.channelId) target = `<#${def.channelId}> (server default)`;
+        }
+        lines.push(
+          `• **${m.platform}** — ${m.displayName ?? m.channelKey} → ${target} | isLive=${m.isLive} | last=${m.lastItemId ?? 'null'}`
+        );
+      }
+
+      await interaction.reply({ content: lines.join('\n'), flags: MessageFlags.Ephemeral });
       return;
     }
 
@@ -233,6 +272,7 @@ export const command = {
         `channelKey: ${row.channelKey}`,
         `displayName: ${row.displayName ?? '(none)'}`,
         `ownerDiscordId: ${row.ownerDiscordId}`,
+        `guildId: ${row.guildId ?? '(null)'}`,
         `discordChannelId: ${row.discordChannelId ?? '(default)'}`,
         `isLive: ${row.isLive}`,
         `lastItemId: ${row.lastItemId ?? 'null'}`,
