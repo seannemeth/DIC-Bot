@@ -31,18 +31,29 @@ async function resolveTargetChannelId(sub: {
 }
 
 // Helper to post in the right channel
-async function postAlert(client: Client, sub: any, embed: EmbedBuilder): Promise<boolean> {
-  const channelId = await resolveTargetChannelId({
-    discordChannelId: sub.discordChannelId ?? null,
-    guildId: sub.guildId ?? null,
+async function postAlert(client: any, sub: any, embed: any): Promise<boolean> {
+  // resolve target channel (sub.discordChannelId -> guild default -> env)
+  const channelId = sub.discordChannelId || (sub.guildId
+    ? (await prisma.liveAlertDefault.findUnique({ where: { guildId: sub.guildId } }).catch(() => null))?.channelId
+    : null) || process.env.LIVE_ALERT_CHANNEL_ID;
+
+  if (!channelId) { console.warn('[live] no target channel for', sub.platform, sub.channelKey); return false; }
+
+  const ch = await client.channels.fetch(channelId).catch((e: any) => {
+    console.warn('[live] fetch channel failed', channelId, e?.message || e);
+    return null;
   });
-  if (!channelId) return false;
-
-  const ch = await client.channels.fetch(channelId).catch(() => null as any);
-  if (!ch || !('isTextBased' in ch) || !ch.isTextBased()) return false;
-
-  await (ch as any).send({ embeds: [embed] }).catch(() => {});
-  return true;
+  if (!ch || !('isTextBased' in ch) || !ch.isTextBased()) {
+    console.warn('[live] channel not text-based or inaccessible', channelId);
+    return false;
+  }
+  try {
+    await (ch as any).send({ embeds: [embed] });
+    return true;
+  } catch (e: any) {
+    console.warn('[live] send failed', channelId, e?.message || e);
+    return false;
+  }
 }
 
 /* ------------------------ YouTube ticker ------------------------ */
