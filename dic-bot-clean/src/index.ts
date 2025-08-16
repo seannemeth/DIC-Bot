@@ -46,6 +46,8 @@ import { command as scheduleImport } from './commands/scheduleImport';
 import { command as scoresImport } from './commands/scoresImport';
 import { command as storeSync } from './commands/store_sync';
 import { command as setteamBulk } from './commands/setteam_bulk';
+import { command as livealertsDiag } from './commands/livealerts_diag';
+
 // (optional) on-demand poll command if you added it:
 // import { command as livealertsTick } from './commands/livealerts_tick';
 
@@ -112,6 +114,7 @@ const modules = [
   { command: livealertsTestpost },
   { command: livealertsReset },
   { command: livealertsNotify },
+  { command: livealertsDiag },
   // { command: livealertsTick }, // <- uncomment if you added /livealerts_tick
 ];
 
