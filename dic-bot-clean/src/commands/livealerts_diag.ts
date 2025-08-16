@@ -8,10 +8,14 @@ import { PrismaClient } from '@prisma/client';
 
 const prisma = new PrismaClient();
 
+function safeParse(t: string) {
+  try { return JSON.parse(t); } catch { return t; }
+}
+
 async function probeYouTube(channelId: string) {
   const key = process.env.YOUTUBE_API_KEY;
   if (!key) {
-    return { ok: false, error: 'YOUTUBE_API_KEY not set' };
+    return { ok: false as const, error: 'YOUTUBE_API_KEY not set' };
   }
 
   const result: any = { ok: true, strict: null, fallback: null };
@@ -33,7 +37,7 @@ async function probeYouTube(channelId: string) {
     result.strict = { error: String(e?.message || e) };
   }
 
-  // B) fallback latest video
+  // B) fallback latest
   try {
     const u2 = new URL('https://www.googleapis.com/youtube/v3/search');
     u2.searchParams.set('part', 'snippet');
@@ -51,17 +55,22 @@ async function probeYouTube(channelId: string) {
   }
 
   // derive quick reason
-  const liveId = result.strict?.body?.items?.[0]?.id?.videoId
-              ?? (result.fallback?.body?.items?.[0]?.snippet?.liveBroadcastContent === 'live'
-                    ? result.fallback?.body?.items?.[0]?.id?.videoId
-                    : null);
-  const liveState = result.fallback?.body?.items?.[0]?.snippet?.liveBroadcastContent;
+  const fallbackLiveState = result.fallback?.body?.items?.[0]?.snippet?.liveBroadcastContent;
+  const strictId = result.strict?.body?.items?.[0]?.id?.videoId ?? null;
+  const fallbackId =
+    fallbackLiveState === 'live' ? result.fallback?.body?.items?.[0]?.id?.videoId ?? null : null;
+
+  const liveId = strictId || fallbackId;
+  const title =
+    result.strict?.body?.items?.[0]?.snippet?.title ??
+    result.fallback?.body?.items?.[0]?.snippet?.title;
 
   return {
-    ok: true,
+    ok: true as const,
     live: Boolean(liveId),
-    liveId,
-    liveState,
+    liveId: liveId as string | null,
+    liveState: fallbackLiveState as string | undefined,
+    title: title as string | undefined,
     raw: result,
   };
 }
@@ -70,7 +79,7 @@ async function probeTwitch(login: string) {
   const clientId = process.env.TWITCH_CLIENT_ID;
   const clientSecret = process.env.TWITCH_CLIENT_SECRET;
   if (!clientId || !clientSecret) {
-    return { ok: false, error: 'TWITCH_CLIENT_ID / TWITCH_CLIENT_SECRET not set' };
+    return { ok: false as const, error: 'TWITCH_CLIENT_ID / TWITCH_CLIENT_SECRET not set' };
   }
 
   const result: any = { ok: true, token: null, users: null, streams: null };
@@ -87,13 +96,13 @@ async function probeTwitch(login: string) {
     });
     const body = await tr.text();
     result.token = { status: tr.status, body: safeParse(body) };
-    if (!tr.ok) return { ok: false, error: `token_error ${tr.status}`, raw: result };
+    if (!tr.ok) return { ok: false as const, error: `token_error ${tr.status}`, raw: result };
   } catch (e: any) {
-    return { ok: false, error: `token_fetch ${String(e?.message || e)}` };
+    return { ok: false as const, error: `token_fetch ${String(e?.message || e)}` };
   }
 
   const access = result.token.body?.access_token as string | undefined;
-  if (!access) return { ok: false, error: 'no_access_token', raw: result };
+  if (!access) return { ok: false as const, error: 'no_access_token', raw: result };
 
   // users
   try {
@@ -109,7 +118,7 @@ async function probeTwitch(login: string) {
 
   const user = result.users?.body?.data?.[0];
   if (!user) {
-    return { ok: true, live: false, reason: 'no_such_user', raw: result };
+    return { ok: true as const, live: false, reason: 'no_such_user', raw: result };
   }
 
   // streams
@@ -125,18 +134,15 @@ async function probeTwitch(login: string) {
   }
 
   const live = result.streams?.body?.data?.[0] ?? null;
+
   return {
-    ok: true,
+    ok: true as const,
     live: Boolean(live),
     liveId: live ? String(live.id) : null,
-    title: live?.title,
+    title: live?.title as string | undefined,
     url: live ? `https://www.twitch.tv/${user.login}` : null,
     raw: result,
   };
-}
-
-function safeParse(t: string) {
-  try { return JSON.parse(t); } catch { return t; }
 }
 
 export const command = {
@@ -188,16 +194,16 @@ export const command = {
     }
 
     // 3) Probe API
-    const api =
-      platform === 'youtube'
-        ? await probeYouTube(key)
-        : await probeTwitch(key);
+    const api = platform === 'youtube'
+      ? await probeYouTube(key)
+      : await probeTwitch(key);
 
     // 4) Build diagnosis
     const lines: string[] = [];
     lines.push(`**Platform**: ${platform}`);
     lines.push(`**Key**: \`${key}\``);
     lines.push('');
+
     if (subInfo) {
       lines.push(`**DB subscription**: found`);
       lines.push(`• displayName: ${subInfo.displayName ?? '(null)'}`);
@@ -208,34 +214,39 @@ export const command = {
     } else {
       lines.push(`**DB subscription**: **NOT FOUND** (use \`/livealerts add\`)`);
     }
+
     lines.push('');
     lines.push(`**Post target**: ${postTarget ? `<#${postTarget}>` : '(none)'}`);
     lines.push(`**Can post?** ${canPost ? 'yes' : 'no'}`);
-
     lines.push('');
+
     if (!api.ok) {
       lines.push(`**API**: error → ${api.error}`);
     } else {
       lines.push(`**API live?** ${api.live ? 'YES' : 'no'}`);
+
       if (platform === 'youtube') {
-        lines.push(`• liveId: ${api.liveId ?? '(null)'}`);
-        lines.push(`• liveBroadcastContent: ${api.liveState ?? '(unknown)'}`);
+        const liveState: string | undefined = (api as any).liveState;
+        const liveId: string | null = (api as any).liveId ?? null;
+        lines.push(`• liveId: ${liveId ?? '(null)'}`);
+        lines.push(`• liveBroadcastContent: ${liveState ?? '(unknown)'}`);
         if (!api.live) {
-          lines.push(`👉 If you *are* live: Ensure the stream is **Public** (Unlisted/Private/Members won’t appear). Also confirm YouTube Data API v3 is enabled for your API key project.`);
+          lines.push(`👉 If you *are* live: Ensure the stream is **Public** (Unlisted/Private/Members won’t appear). Also confirm **YouTube Data API v3** is enabled for your API key project.`);
         }
       } else {
-        lines.push(`• liveId: ${api.liveId ?? '(null)'}`);
-        if (api.title) lines.push(`• title: ${api.title}`);
+        const liveId: string | null = (api as any).liveId ?? null;
+        const title: string | undefined = (api as any).title;
+        lines.push(`• liveId: ${liveId ?? '(null)'}`);
+        if (title) lines.push(`• title: ${title}`);
         if (!api.live) {
-          lines.push(`👉 If you *are* live: Verify **login** is correct (not display name), and that the app token is valid (check client id/secret).`);
+          lines.push(`👉 If you *are* live: Verify **Twitch login** is correct (not display name), and that the app token is valid (client id/secret correct).`);
         }
       }
     }
 
-    // 5) Next actions hints
     lines.push('');
     lines.push(`**Next steps**`);
-    if (api.ok && api.live) {
+    if ((api as any).ok && (api as any).live) {
       lines.push(`• Run \`/livealerts_reset platform:${platform} id:${key}\` then \`/livealerts_tick platform:${platform}\` to clear duplicate-suppression and post now.`);
     } else {
       lines.push(`• Fix the visibility/ID/keys as above, then \`/livealerts_tick platform:${platform}\`.`);
@@ -244,11 +255,11 @@ export const command = {
     const emb = new EmbedBuilder()
       .setTitle('Live Alerts Diagnosis')
       .setDescription(lines.join('\n'))
-      .setColor(api.ok && api.live ? 0x2ecc71 : 0xe67e22)
+      .setColor((api as any).ok && (api as any).live ? 0x2ecc71 : 0xe67e22)
       .setTimestamp(new Date());
 
-    // Also attach trimmed raw JSON (first 4KB) for power users
-    const raw: any = api.raw ?? {};
+    // attach trimmed raw JSON (first 4KB)
+    const raw: any = (api as any).raw ?? {};
     const rawTxt = '```json\n' + JSON.stringify(raw, null, 2).slice(0, 4000) + '\n```';
 
     await interaction.editReply({ embeds: [emb], content: rawTxt });
