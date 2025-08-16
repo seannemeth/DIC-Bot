@@ -144,46 +144,28 @@ model Upgrade {
 }
 
 
+// === Live alerts models (keep exactly one StreamSub) ===
 model StreamSub {
   id               String   @id @default(cuid())
-  // 'youtube' | 'twitch'
-  platform         String
-  // YouTube: channelId  (e.g., UCxxxx); Twitch: login (e.g., shroud)
-  channelKey       String
-  // Owner (Discord user id)
-  ownerDiscordId   String
-  // Where to post alerts (Discord channel id). Fallback to LIVE_ALERT_CHANNEL_ID if null.
-  discordChannelId String?
-  // For duplicate suppression: last notified item id
-  lastItemId       String?
+  platform         String            // 'youtube' | 'twitch'
+  channelKey       String            // YouTube: UC...  Twitch: login (username)
+  ownerDiscordId   String            // user who created the sub
+  discordChannelId String?           // specific target channel (optional)
+  guildId          String?           // server where it was created (optional; used for defaults)
+  lastItemId       String?           // dedupe (YT videoId / Twitch stream id)
   isLive           Boolean  @default(false)
   displayName      String?
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
-  @@unique([platform, channelKey])
-  @@index([ownerDiscordId])
-}
-model StreamSub {
-  id               String   @id @default(cuid())
-  platform         String
-  channelKey       String
-  ownerDiscordId   String
-  discordChannelId String?
-  lastItemId       String?
-  isLive           Boolean  @default(false)
-  displayName      String?
-  guildId          String?   // ✅ NEW: the guild where the sub was created
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
-
-  @@unique([platform, channelKey])
+  @@unique([platform, channelKey])   // one sub per {platform, channel}
   @@index([ownerDiscordId])
   @@index([guildId])
 }
 
 model LiveAlertDefault {
-  guildId  String  @id
+  guildId   String  @id              // server id
   channelId String
   updatedAt DateTime @updatedAt
 }
+
