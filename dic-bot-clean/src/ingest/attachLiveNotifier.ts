@@ -1,3 +1,4 @@
+// src/ingest/attachLiveNotifier.ts
 import { Client, EmbedBuilder } from 'discord.js';
 import { PrismaClient } from '@prisma/client';
 
@@ -30,18 +31,14 @@ async function resolveTargetChannelId(sub: {
 }
 
 // Helper to post in the right channel
-async function postAlert(client: any, sub: any, embed: any): Promise<boolean> {
-  // resolve target channel (sub.discordChannelId -> guild default -> env)
-  const channelId =
-    sub.discordChannelId ||
-    (sub.guildId
-      ? (await prisma.liveAlertDefault.findUnique({ where: { guildId: sub.guildId } }).catch(() => null))?.channelId
-      : null) ||
-    process.env.LIVE_ALERT_CHANNEL_ID;
-
+async function postAlert(client: Client, sub: any, embed: EmbedBuilder): Promise<boolean> {
+  const channelId = await resolveTargetChannelId({ discordChannelId: sub.discordChannelId, guildId: sub.guildId ?? null });
   dlog('[post] resolved channel', { channelId, platform: sub.platform, channelKey: sub.channelKey });
 
-  if (!channelId) { console.warn('[live] no target channel for', sub.platform, sub.channelKey); return false; }
+  if (!channelId) {
+    console.warn('[live] no target channel for', sub.platform, sub.channelKey);
+    return false;
+  }
 
   const ch = await client.channels.fetch(channelId).catch((e: any) => {
     console.warn('[live] fetch channel failed', channelId, e?.message || e);
@@ -60,8 +57,23 @@ async function postAlert(client: any, sub: any, embed: any): Promise<boolean> {
   }
 }
 
+/* ------------------------ YouTube helpers ------------------------ */
+// Fallback C: use /channel/<UCID>/live redirect to watch?v=VIDEO_ID if truly live & public
+async function resolveLiveVideoByRedirect(channelId: string): Promise<string | null> {
+  const url = `https://www.youtube.com/channel/${channelId}/live`;
+  try {
+    const res = await fetch(url, { redirect: 'manual' as any });
+    const loc = res.headers.get('location') || '';
+    // Expect something like /watch?v=VIDEO_ID or a full https URL
+    const match = loc.match(/[?&]v=([0-9A-Za-z_-]{6,})/);
+    return match ? match[1] : null;
+  } catch {
+    return null;
+  }
+}
+
 /* ------------------------ YouTube ticker ------------------------ */
-// Stronger YouTube detection: try (A) strict live search, then (B) fallback by latest item
+// Stronger YouTube detection: (A) strict live search, (B) latest-item fallback, (C) /live redirect
 export async function tickYouTube(client: Client): Promise<void> {
   const key = process.env.YOUTUBE_API_KEY;
   if (!key) return;
@@ -123,6 +135,16 @@ export async function tickYouTube(client: Client): Promise<void> {
         }
       } catch (e) {
         dlog('yt fetch error (fallback)', e);
+      }
+    }
+
+    // --- (C) Final fallback: /live redirect probe ---
+    if (!liveVideoId) {
+      const viaRedirect = await resolveLiveVideoByRedirect(channelId);
+      if (viaRedirect) {
+        liveVideoId = viaRedirect;
+        // Title unknown here unless we do an extra videos.list call (more quota); optional:
+        // title = undefined;
       }
     }
 
