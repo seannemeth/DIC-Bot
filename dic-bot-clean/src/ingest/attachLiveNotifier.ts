@@ -1,4 +1,3 @@
-// src/ingest/attachLiveNotifier.ts
 import { Client, EmbedBuilder } from 'discord.js';
 import { PrismaClient } from '@prisma/client';
 
@@ -33,9 +32,14 @@ async function resolveTargetChannelId(sub: {
 // Helper to post in the right channel
 async function postAlert(client: any, sub: any, embed: any): Promise<boolean> {
   // resolve target channel (sub.discordChannelId -> guild default -> env)
-  const channelId = sub.discordChannelId || (sub.guildId
-    ? (await prisma.liveAlertDefault.findUnique({ where: { guildId: sub.guildId } }).catch(() => null))?.channelId
-    : null) || process.env.LIVE_ALERT_CHANNEL_ID;
+  const channelId =
+    sub.discordChannelId ||
+    (sub.guildId
+      ? (await prisma.liveAlertDefault.findUnique({ where: { guildId: sub.guildId } }).catch(() => null))?.channelId
+      : null) ||
+    process.env.LIVE_ALERT_CHANNEL_ID;
+
+  dlog('[post] resolved channel', { channelId, platform: sub.platform, channelKey: sub.channelKey });
 
   if (!channelId) { console.warn('[live] no target channel for', sub.platform, sub.channelKey); return false; }
 
@@ -124,6 +128,16 @@ export async function tickYouTube(client: Client): Promise<void> {
 
     const isNowLive = Boolean(liveVideoId);
 
+    // 🔊 Per-channel debug line
+    dlog('[yt]', sub.channelKey, {
+      display: sub.displayName,
+      isNowLive,
+      liveVideoId,
+      title,
+      lastItemId: sub.lastItemId,
+      wasLive: sub.isLive,
+    });
+
     if (isNowLive) {
       const alreadyNotified = sub.isLive && sub.lastItemId === liveVideoId;
       if (!alreadyNotified) {
@@ -134,7 +148,7 @@ export async function tickYouTube(client: Client): Promise<void> {
           .setColor(0xff0000)
           .setTimestamp(new Date());
         const posted = await postAlert(client, sub, embed);
-        dlog('yt post', sub.channelKey, 'posted?', posted, 'videoId', liveVideoId);
+        dlog('[yt-post]', sub.channelKey, { posted, liveVideoId });
       }
       await prisma.streamSub.update({
         where: { platform_channelKey: { platform: 'youtube', channelKey: sub.channelKey } },
@@ -145,7 +159,7 @@ export async function tickYouTube(client: Client): Promise<void> {
 
     // not live → reset so next go-live notifies again
     if (sub.isLive || sub.lastItemId) {
-      dlog('yt reset', sub.channelKey);
+      dlog('[yt-reset]', sub.channelKey, { wasLive: sub.isLive, lastItemId: sub.lastItemId });
       await prisma.streamSub.update({
         where: { platform_channelKey: { platform: 'youtube', channelKey: sub.channelKey } },
         data: { isLive: false, lastItemId: null },
@@ -153,6 +167,7 @@ export async function tickYouTube(client: Client): Promise<void> {
     }
   }
 }
+
 /* ------------------------ Twitch ticker ------------------------ */
 export async function tickTwitch(client: Client): Promise<void> {
   const clientId = process.env.TWITCH_CLIENT_ID;
@@ -221,6 +236,16 @@ export async function tickTwitch(client: Client): Promise<void> {
 
       const live = liveByUserId[String(user.id)] || null;
 
+      // 🔊 Per-channel debug line
+      dlog('[tw]', sub.channelKey, {
+        display: sub.displayName,
+        isNowLive: Boolean(live),
+        streamId: live ? String(live.id) : null,
+        title: live?.title,
+        lastItemId: sub.lastItemId,
+        wasLive: sub.isLive,
+      });
+
       if (live) {
         // Use stream id as unique live session id
         const streamId: string = String(live.id);
@@ -236,7 +261,7 @@ export async function tickTwitch(client: Client): Promise<void> {
             .setColor(0x9146ff)
             .setTimestamp(new Date());
           const posted = await postAlert(client, sub, embed);
-          dlog('tw post', sub.channelKey, 'posted?', posted, 'streamId', streamId);
+          dlog('[tw-post]', sub.channelKey, { posted, streamId });
         }
 
         await prisma.streamSub.update({
@@ -246,7 +271,7 @@ export async function tickTwitch(client: Client): Promise<void> {
       } else {
         // not live → reset
         if (sub.isLive || sub.lastItemId) {
-          dlog('tw reset', sub.channelKey);
+          dlog('[tw-reset]', sub.channelKey, { wasLive: sub.isLive, lastItemId: sub.lastItemId });
           await prisma.streamSub.update({
             where: { platform_channelKey: { platform: 'twitch', channelKey: sub.channelKey } },
             data: { isLive: false, lastItemId: null },
